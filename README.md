@@ -101,7 +101,7 @@ This produces two artifacts:
 | ------------- | --------------------------------------------------------------------- |
 | Runtime       | `nodejs20.x` (or newer)                                               |
 | Handler       | `index.handler`                                                       |
-| Function URL  | Enabled, with invoke mode **`RESPONSE_STREAM`** (the SSR is streamed) |
+| Function URL  | Enabled, buffered invoke mode (the handler returns a full response)   |
 | Environment   | `SESSION_SECRET` (required), `VITE_API_BASE_URL`, `API_SERVER_URL`    |
 
 `SESSION_COOKIE_SECURE` can keep its production default of `true` because

@@ -1,14 +1,11 @@
-import { Readable, type Writable } from 'node:stream';
-import { pipeline } from 'node:stream/promises';
-
 /**
  * AWS Lambda entry point for the admin panel — an alternative to the Bun
  * server in `server.ts` (used by the Docker/ECS deployment).
  *
  * It reuses the same compiled request handler (`dist/server/server.js`) and is
- * designed for a Lambda Function URL with response streaming, fronted by
- * CloudFront. Static assets (`dist/client`) are served by CloudFront from S3,
- * so only dynamic routes (SSR pages + server functions) reach this handler.
+ * designed for a Lambda Function URL (buffered) fronted by CloudFront. Static
+ * assets (`dist/client`) are served by CloudFront from S3, so only dynamic
+ * routes (SSR pages + server functions) reach this handler.
  */
 
 type LambdaFunctionUrlEvent = {
@@ -21,31 +18,13 @@ type LambdaFunctionUrlEvent = {
   requestContext: { http: { method: string } };
 };
 
-type ResponseStream = Writable & { end: (chunk?: unknown) => void };
-
-type ResponseMetadata = {
+type LambdaFunctionUrlResult = {
   statusCode: number;
-  headers?: Record<string, string>;
-  cookies?: string[];
+  headers: Record<string, string>;
+  cookies: string[];
+  body: string;
+  isBase64Encoded: boolean;
 };
-
-declare global {
-  // Provided by the AWS Lambda Node.js managed runtime.
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace awslambda {
-    function streamifyResponse(
-      handler: (
-        event: LambdaFunctionUrlEvent,
-        responseStream: ResponseStream,
-        context: unknown,
-      ) => Promise<void>,
-    ): unknown;
-
-    const HttpResponseStream: {
-      from: (stream: ResponseStream, metadata: ResponseMetadata) => ResponseStream;
-    };
-  }
-}
 
 type FetchHandler = { default: { fetch: (request: Request) => Promise<Response> } };
 
@@ -76,7 +55,19 @@ function toRequest(event: LambdaFunctionUrlEvent): Request {
   return new Request(url, { method, headers, body });
 }
 
-function toMetadata(response: Response): ResponseMetadata {
+export async function handler(event: LambdaFunctionUrlEvent): Promise<LambdaFunctionUrlResult> {
+  if (event.rawPath === '/health') {
+    return {
+      statusCode: 200,
+      headers: { 'content-type': 'text/plain' },
+      cookies: [],
+      body: 'ok',
+      isBase64Encoded: false,
+    };
+  }
+
+  const response = await app.fetch(toRequest(event));
+
   const headers: Record<string, string> = {};
   response.headers.forEach((value, key) => {
     if (key !== 'set-cookie') headers[key] = value;
@@ -85,27 +76,13 @@ function toMetadata(response: Response): ResponseMetadata {
 
   const cookies =
     typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+  const body = Buffer.from(await response.arrayBuffer());
 
-  return { statusCode: response.status, headers, cookies };
+  return {
+    statusCode: response.status,
+    headers,
+    cookies,
+    body: body.toString('base64'),
+    isBase64Encoded: true,
+  };
 }
-
-export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
-  if (event.rawPath === '/health') {
-    const stream = awslambda.HttpResponseStream.from(responseStream, {
-      statusCode: 200,
-      headers: { 'content-type': 'text/plain' },
-    });
-    stream.end('ok');
-    return;
-  }
-
-  const response = await app.fetch(toRequest(event));
-  const stream = awslambda.HttpResponseStream.from(responseStream, toMetadata(response));
-
-  if (!response.body) {
-    stream.end();
-    return;
-  }
-
-  await pipeline(Readable.fromWeb(response.body), stream);
-});
