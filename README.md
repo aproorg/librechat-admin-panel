@@ -78,3 +78,45 @@ docker run -p 3000:3000 \
   -e VITE_BASE_PATH=/adminpanel \
   librechat-admin-panel
 ```
+
+### AWS Lambda + CloudFront + S3
+
+As an alternative to a long-running container, the panel can run serverless:
+static assets on S3 behind CloudFront, and the dynamic part (SSR pages and
+server functions) on a single Lambda. `lambda.ts` reuses the same compiled
+request handler as `server.ts`, so both deployment shapes share one codebase.
+
+```bash
+bun run build:lambda
+```
+
+This produces two artifacts:
+
+- `dist/client/` — static assets (hashed bundles, icons, `manifest.json`, …) to upload to S3.
+- `dist/lambda/index.mjs` — a self-contained Node ESM bundle (no `node_modules` needed) to deploy as the Lambda.
+
+**Lambda configuration**
+
+| Setting       | Value                                                                 |
+| ------------- | --------------------------------------------------------------------- |
+| Runtime       | `nodejs20.x` (or newer)                                               |
+| Handler       | `index.handler`                                                       |
+| Function URL  | Enabled, with invoke mode **`RESPONSE_STREAM`** (the SSR is streamed) |
+| Environment   | `SESSION_SECRET` (required), `VITE_API_BASE_URL`, `API_SERVER_URL`    |
+
+`SESSION_COOKIE_SECURE` can keep its production default of `true` because
+CloudFront serves the panel over HTTPS. Set `VITE_BASE_PATH` at build time
+(`VITE_BASE_PATH=/adminpanel bun run build:lambda`) to serve under a subpath.
+
+**CloudFront routing**
+
+Point CloudFront at two origins and split traffic by path:
+
+| Path pattern                                                        | Origin               | Caching       |
+| ------------------------------------------------------------------- | -------------------- | ------------- |
+| `/assets/*`, `/favicon.ico`, `/manifest.json`, `/robots.txt`, `*.svg` | S3 (static assets)   | long, public  |
+| _default (everything else)_                                         | Lambda Function URL  | none          |
+
+The Lambda handler serves only dynamic routes and already returns
+`no-cache, no-store, must-revalidate`; the static files are immutable and
+hashed, so S3 can cache them aggressively at the edge.
