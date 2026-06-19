@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { gzipSync } from 'node:zlib';
 import { join } from 'node:path';
 
 /**
@@ -99,6 +100,31 @@ function isStaticPath(pathname: string): boolean {
   );
 }
 
+function acceptsGzip(event: AlbEvent): boolean {
+  const enc =
+    event.multiValueHeaders?.['accept-encoding']?.join(',') ??
+    event.headers?.['accept-encoding'] ??
+    '';
+  return enc.includes('gzip');
+}
+
+function isCompressible(contentType: string): boolean {
+  return /javascript|css|json|html|svg|text|xml|manifest/.test(contentType);
+}
+
+// ALB Lambda targets cap the response at 1 MB. Gzipping keeps large assets
+// (e.g. the ~1 MB icons chunk) well under it, and shrinks transfer overall.
+function encodeBody(
+  buffer: Buffer,
+  contentType: string,
+  gzip: boolean,
+): { body: string; contentEncoding?: string } {
+  if (gzip && isCompressible(contentType) && buffer.length > 1024) {
+    return { body: gzipSync(buffer).toString('base64'), contentEncoding: 'gzip' };
+  }
+  return { body: buffer.toString('base64') };
+}
+
 function buildRequest(event: AlbEvent): Request {
   const headers = new Headers();
   if (event.multiValueHeaders) {
@@ -134,19 +160,25 @@ function buildRequest(event: AlbEvent): Request {
   return new Request(url, { method, headers, body });
 }
 
-async function serveStatic(pathname: string): Promise<AlbResult | null> {
+async function serveStatic(pathname: string, gzip: boolean): Promise<AlbResult | null> {
   const filePath = join(CLIENT_DIR, pathname);
   if (!filePath.startsWith(CLIENT_DIR)) return null;
   try {
     const data = await readFile(filePath);
+    const ct = contentType(pathname);
     const cache = pathname.startsWith('/assets/') ? IMMUTABLE : NEVER_CACHE.has(pathname) ? NO_CACHE : '';
-    const multiValueHeaders: Record<string, string[]> = { 'content-type': [contentType(pathname)] };
+    const encoded = encodeBody(data, ct, gzip);
+    const multiValueHeaders: Record<string, string[]> = { 'content-type': [ct] };
     if (cache) multiValueHeaders['cache-control'] = [cache];
+    if (encoded.contentEncoding) {
+      multiValueHeaders['content-encoding'] = [encoded.contentEncoding];
+      multiValueHeaders['vary'] = ['accept-encoding'];
+    }
     return {
       statusCode: 200,
       statusDescription: '200 OK',
       multiValueHeaders,
-      body: data.toString('base64'),
+      body: encoded.body,
       isBase64Encoded: true,
     };
   } catch {
@@ -154,7 +186,7 @@ async function serveStatic(pathname: string): Promise<AlbResult | null> {
   }
 }
 
-async function toAlbResult(response: Response): Promise<AlbResult> {
+async function toAlbResult(response: Response, gzip: boolean): Promise<AlbResult> {
   const multiValueHeaders: Record<string, string[]> = {};
   response.headers.forEach((value, key) => {
     if (key === 'set-cookie') return;
@@ -165,12 +197,19 @@ async function toAlbResult(response: Response): Promise<AlbResult> {
   if (cookies.length) multiValueHeaders['set-cookie'] = cookies;
   if (!multiValueHeaders['cache-control']) multiValueHeaders['cache-control'] = [NO_CACHE];
 
-  const body = Buffer.from(await response.arrayBuffer());
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentType = multiValueHeaders['content-type']?.[0] ?? '';
+  const alreadyEncoded = 'content-encoding' in multiValueHeaders;
+  const encoded = encodeBody(buffer, contentType, gzip && !alreadyEncoded);
+  if (encoded.contentEncoding) {
+    multiValueHeaders['content-encoding'] = [encoded.contentEncoding];
+    (multiValueHeaders['vary'] ??= []).push('accept-encoding');
+  }
   return {
     statusCode: response.status,
     statusDescription: statusLine(response.status, response.statusText),
     multiValueHeaders,
-    body: body.toString('base64'),
+    body: encoded.body,
     isBase64Encoded: true,
   };
 }
@@ -186,11 +225,13 @@ export async function handler(event: AlbEvent): Promise<AlbResult> {
     };
   }
 
+  const gzip = acceptsGzip(event);
+
   if (isStaticPath(event.path)) {
-    const asset = await serveStatic(event.path);
+    const asset = await serveStatic(event.path, gzip);
     if (asset) return asset;
   }
 
   const response = await app.fetch(buildRequest(event));
-  return toAlbResult(response);
+  return toAlbResult(response, gzip);
 }
