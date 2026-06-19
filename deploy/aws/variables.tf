@@ -29,8 +29,9 @@ variable "api_server_url" {
 
 variable "session_secret" {
   type        = string
+  default     = null
   sensitive   = true
-  description = "SESSION_SECRET — session cookie encryption key (min 32 chars). Prefer TF_VAR_session_secret over committing it."
+  description = "SESSION_SECRET — session cookie encryption key. When null (default), the module generates and persists a random one in state."
 }
 
 variable "domain_name" {

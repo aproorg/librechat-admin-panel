@@ -4,6 +4,18 @@ data "archive_file" "lambda" {
   output_path = "${path.root}/.build/${var.name}-lambda.zip"
 }
 
+# Generated once and kept in state when no session_secret is supplied, so
+# repeated applies don't rotate it (which would invalidate active sessions).
+resource "random_password" "session_secret" {
+  count   = var.session_secret == null ? 1 : 0
+  length  = 64
+  special = false
+}
+
+locals {
+  session_secret = coalesce(var.session_secret, one(random_password.session_secret[*].result))
+}
+
 resource "aws_iam_role" "lambda" {
   name = "${var.name}-lambda"
 
@@ -36,7 +48,7 @@ resource "aws_lambda_function" "this" {
   environment {
     variables = {
       NODE_ENV          = "production"
-      SESSION_SECRET    = var.session_secret
+      SESSION_SECRET    = local.session_secret
       VITE_API_BASE_URL = var.api_base_url
       API_SERVER_URL    = var.api_server_url != "" ? var.api_server_url : var.api_base_url
     }

@@ -21,8 +21,9 @@ variable "api_server_url" {
 
 variable "session_secret" {
   type        = string
+  default     = null
   sensitive   = true
-  description = "SESSION_SECRET — session cookie encryption key (min 32 chars)."
+  description = "SESSION_SECRET — session cookie encryption key (min 32 chars). When null, a random 64-char secret is generated and kept in state."
 }
 
 variable "domain_name" {
