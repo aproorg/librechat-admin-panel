@@ -3,7 +3,7 @@
 Terraform for the serverless deployment described in the root README's
 "AWS Lambda + CloudFront + S3" section. CloudFront serves the static client
 assets from S3 and routes dynamic routes (SSR + server functions) to a Lambda
-Function URL with response streaming.
+Function URL.
 
 This is an apro-side deployment recipe — it is **not** part of the upstream
 admin-panel app.

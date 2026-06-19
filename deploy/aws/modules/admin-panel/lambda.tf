@@ -58,7 +58,7 @@ resource "aws_lambda_function" "this" {
 resource "aws_lambda_function_url" "this" {
   function_name      = aws_lambda_function.this.function_name
   authorization_type = "AWS_IAM"
-  invoke_mode        = "RESPONSE_STREAM"
+  invoke_mode        = "BUFFERED"
 }
 
 resource "aws_lambda_permission" "cloudfront" {
