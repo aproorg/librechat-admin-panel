@@ -43,6 +43,31 @@ const NO_CACHE = 'no-cache, no-store, must-revalidate';
 const IMMUTABLE = 'public, max-age=31536000, immutable';
 const NEVER_CACHE = new Set(['/manifest.json', '/robots.txt', '/sw.js']);
 
+// ALB requires statusDescription to be a "<code> <reason>" line; a bare code
+// (e.g. "307") makes the ALB return 502 Bad Gateway.
+const REASON_PHRASES: Record<number, string> = {
+  200: 'OK',
+  204: 'No Content',
+  301: 'Moved Permanently',
+  302: 'Found',
+  303: 'See Other',
+  304: 'Not Modified',
+  307: 'Temporary Redirect',
+  308: 'Permanent Redirect',
+  400: 'Bad Request',
+  401: 'Unauthorized',
+  403: 'Forbidden',
+  404: 'Not Found',
+  429: 'Too Many Requests',
+  500: 'Internal Server Error',
+  502: 'Bad Gateway',
+  503: 'Service Unavailable',
+};
+
+function statusLine(status: number, statusText?: string): string {
+  return `${status} ${statusText || REASON_PHRASES[status] || 'OK'}`;
+}
+
 const CONTENT_TYPES: Record<string, string> = {
   js: 'text/javascript',
   mjs: 'text/javascript',
@@ -143,7 +168,7 @@ async function toAlbResult(response: Response): Promise<AlbResult> {
   const body = Buffer.from(await response.arrayBuffer());
   return {
     statusCode: response.status,
-    statusDescription: `${response.status}`,
+    statusDescription: statusLine(response.status, response.statusText),
     multiValueHeaders,
     body: body.toString('base64'),
     isBase64Encoded: true,
