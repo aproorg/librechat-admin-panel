@@ -76,5 +76,8 @@ terraform apply -var-file=environments/prod.tfvars.json
   CloudFront domain, is the OIDC client). Already configured for the sandbox.
 - **Re-deploying app changes:** re-run `bun run build:lambda` then
   `terraform apply` — the Lambda zip hash and changed S3 objects update in place.
-- **Custom domain:** add an ACM cert in `us-east-1`, an `aliases` entry, and a
-  `viewer_certificate` block referencing the cert (omitted here for brevity).
+- **Custom domain:** set `domain_name` in the env tfvars (dev uses
+  `admin.sandbox.data.apro.is`). The module looks up the wildcard ACM cert for
+  the parent domain in **us-east-1** (`data "aws_acm_certificate"`) and creates
+  Route53 A/AAAA alias records in the parent zone. Leave `domain_name` unset to
+  use the default `*.cloudfront.net` domain with no DNS record.

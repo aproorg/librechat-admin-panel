@@ -25,6 +25,12 @@ variable "session_secret" {
   description = "SESSION_SECRET — session cookie encryption key (min 32 chars)."
 }
 
+variable "domain_name" {
+  type        = string
+  default     = null
+  description = "Custom hostname for the panel (e.g. admin.sandbox.data.apro.is). When set, the module looks up the wildcard ACM cert for the parent domain (in us-east-1) and creates Route53 alias records. When null, CloudFront uses its default certificate and no DNS record is created."
+}
+
 variable "lambda_memory_mb" {
   type        = number
   default     = 1024

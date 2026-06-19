@@ -36,6 +36,7 @@ resource "aws_cloudfront_distribution" "this" {
   enabled     = true
   comment     = var.name
   price_class = var.price_class
+  aliases     = local.use_custom_domain ? [var.domain_name] : []
 
   origin {
     origin_id                = "s3"
@@ -86,6 +87,9 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    cloudfront_default_certificate = local.use_custom_domain ? null : true
+    acm_certificate_arn            = local.use_custom_domain ? data.aws_acm_certificate.wildcard[0].arn : null
+    ssl_support_method             = local.use_custom_domain ? "sni-only" : null
+    minimum_protocol_version       = local.use_custom_domain ? "TLSv1.2_2021" : null
   }
 }

@@ -33,6 +33,12 @@ variable "session_secret" {
   description = "SESSION_SECRET — session cookie encryption key (min 32 chars). Prefer TF_VAR_session_secret over committing it."
 }
 
+variable "domain_name" {
+  type        = string
+  default     = null
+  description = "Custom hostname for the panel (e.g. admin.sandbox.data.apro.is). When set, the wildcard ACM cert for the parent domain is looked up in us-east-1 and Route53 alias records are created."
+}
+
 variable "lambda_memory_mb" {
   type        = number
   default     = 1024
