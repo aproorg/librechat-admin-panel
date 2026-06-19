@@ -12,6 +12,14 @@ resource "random_password" "session_secret" {
   special = false
 }
 
+# Shared secret CloudFront injects as a header; the Lambda rejects any request
+# without it. This locks the (public) Function URL to CloudFront, since OAC/SigV4
+# can't sign POST bodies from a browser (Lambda rejects unsigned payloads).
+resource "random_password" "origin_secret" {
+  length  = 40
+  special = false
+}
+
 locals {
   session_secret = coalesce(var.session_secret, one(random_password.session_secret[*].result))
 }
@@ -47,25 +55,27 @@ resource "aws_lambda_function" "this" {
 
   environment {
     variables = {
-      NODE_ENV          = "production"
-      SESSION_SECRET    = local.session_secret
-      VITE_API_BASE_URL = var.api_base_url
-      API_SERVER_URL    = var.api_server_url != "" ? var.api_server_url : var.api_base_url
+      NODE_ENV                 = "production"
+      SESSION_SECRET           = local.session_secret
+      VITE_API_BASE_URL        = var.api_base_url
+      API_SERVER_URL           = var.api_server_url != "" ? var.api_server_url : var.api_base_url
+      CLOUDFRONT_ORIGIN_SECRET = random_password.origin_secret.result
     }
   }
 }
 
 resource "aws_lambda_function_url" "this" {
   function_name      = aws_lambda_function.this.function_name
-  authorization_type = "AWS_IAM"
+  authorization_type = "NONE"
   invoke_mode        = "BUFFERED"
 }
 
-resource "aws_lambda_permission" "cloudfront" {
-  statement_id           = "AllowCloudFrontInvoke"
+# AuthType=NONE still needs an explicit public-invoke grant. Access is gated by
+# the x-origin-verify secret header (checked in the handler), not by IAM.
+resource "aws_lambda_permission" "furl_public" {
+  statement_id           = "FunctionURLAllowPublicAccess"
   action                 = "lambda:InvokeFunctionUrl"
   function_name          = aws_lambda_function.this.function_name
-  principal              = "cloudfront.amazonaws.com"
-  source_arn             = aws_cloudfront_distribution.this.arn
-  function_url_auth_type = "AWS_IAM"
+  principal              = "*"
+  function_url_auth_type = "NONE"
 }

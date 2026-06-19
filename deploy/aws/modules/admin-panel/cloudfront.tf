@@ -25,13 +25,6 @@ resource "aws_cloudfront_origin_access_control" "s3" {
   signing_protocol                  = "sigv4"
 }
 
-resource "aws_cloudfront_origin_access_control" "lambda" {
-  name                              = "${var.name}-lambda"
-  origin_access_control_origin_type = "lambda"
-  signing_behavior                  = "always"
-  signing_protocol                  = "sigv4"
-}
-
 resource "aws_cloudfront_distribution" "this" {
   enabled     = true
   comment     = var.name
@@ -45,15 +38,22 @@ resource "aws_cloudfront_distribution" "this" {
   }
 
   origin {
-    origin_id                = "lambda"
-    domain_name              = local.lambda_origin_host
-    origin_access_control_id = aws_cloudfront_origin_access_control.lambda.id
+    origin_id   = "lambda"
+    domain_name = local.lambda_origin_host
 
     custom_origin_config {
       http_port              = 80
       https_port             = 443
       origin_protocol_policy = "https-only"
       origin_ssl_protocols   = ["TLSv1.2"]
+    }
+
+    # Secret shared with the Lambda so it only honors requests routed via
+    # CloudFront. OAC/SigV4 can't sign POST bodies from a browser, so the
+    # Function URL is public (authorization_type = NONE) and gated by this.
+    custom_header {
+      name  = "x-origin-verify"
+      value = random_password.origin_secret.result
     }
   }
 
