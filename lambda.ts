@@ -56,6 +56,17 @@ function toRequest(event: LambdaFunctionUrlEvent): Request {
 }
 
 export async function handler(event: LambdaFunctionUrlEvent): Promise<LambdaFunctionUrlResult> {
+  const originSecret = process.env.CLOUDFRONT_ORIGIN_SECRET;
+  if (originSecret && event.headers['x-origin-verify'] !== originSecret) {
+    return {
+      statusCode: 403,
+      headers: { 'content-type': 'text/plain' },
+      cookies: [],
+      body: 'Forbidden',
+      isBase64Encoded: false,
+    };
+  }
+
   if (event.rawPath === '/health') {
     return {
       statusCode: 200,
