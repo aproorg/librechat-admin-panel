@@ -1,19 +1,11 @@
-variable "region" {
-  type        = string
-  default     = "eu-west-1"
-  description = "AWS region for the Lambda and S3 bucket."
-}
-
 variable "name" {
   type        = string
-  default     = "librechat-admin-panel"
   description = "Resource name prefix."
 }
 
 variable "dist_dir" {
   type        = string
-  default     = null
-  description = "Path to the build output. Defaults to the repo's dist/ (two levels up). Run `bun run build:lambda` first."
+  description = "Path to the build output (containing client/ and lambda/index.mjs). Run `bun run build:lambda` first."
 }
 
 variable "api_base_url" {
@@ -30,17 +22,17 @@ variable "api_server_url" {
 variable "session_secret" {
   type        = string
   sensitive   = true
-  description = "SESSION_SECRET — session cookie encryption key (min 32 chars). Prefer TF_VAR_session_secret over committing it."
+  description = "SESSION_SECRET — session cookie encryption key (min 32 chars)."
 }
 
 variable "lambda_memory_mb" {
   type        = number
   default     = 1024
-  description = "Lambda memory (MB)."
+  description = "Lambda memory (MB). Higher memory also raises CPU, reducing SSR cold-start latency."
 }
 
 variable "price_class" {
   type        = string
   default     = "PriceClass_100"
-  description = "CloudFront price class."
+  description = "CloudFront price class (PriceClass_100 = NA + EU edge locations)."
 }

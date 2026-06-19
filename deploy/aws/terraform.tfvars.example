@@ -1,6 +1,0 @@
-region         = "eu-west-1"
-api_base_url   = "https://genai.sandbox.data.apro.is"
-api_server_url = "https://genai.sandbox.data.apro.is"
-# session_secret: generate with `openssl rand -hex 32`. Prefer TF_VAR_session_secret
-# in the environment over committing it here.
-session_secret = "change-me-at-least-32-characters-long"

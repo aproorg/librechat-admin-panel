@@ -1,7 +1,7 @@
 data "archive_file" "lambda" {
   type        = "zip"
   source_file = "${var.dist_dir}/lambda/index.mjs"
-  output_path = "${path.module}/.build/lambda.zip"
+  output_path = "${path.root}/.build/${var.name}-lambda.zip"
 }
 
 resource "aws_iam_role" "lambda" {
