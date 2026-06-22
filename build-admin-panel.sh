@@ -5,10 +5,14 @@
 # path), else dist/lambda/package.zip. `index.mjs` + `client/` at the zip root,
 # matching handler `index.handler` and the handler's `./client` path.
 #
-# Requires: bun, zip. Invoked via `bash` by terraform_data.build_admin_panel
-# during apply (also runnable standalone). Excluded from the Docker image via
-# .dockerignore and absent from the lambda zip (built from dist/lambda only).
+# Requires: zip (and bun, which is bootstrapped below if absent). Invoked via
+# `bash` by the aprochat-config build (also runnable standalone). Excluded from
+# the Docker image via .dockerignore and absent from the lambda zip (built from
+# dist/lambda only). All tooling output goes to stderr so callers (terraform's
+# data.external) can keep stdout clean.
 set -euo pipefail
+
+BUN_VERSION="1.3.11"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -19,6 +23,15 @@ OUT_DIR="$(dirname "$OUT_ZIP")"
 if [ ! -f "$HERE/package.json" ]; then
   echo "must run from the admin-panel checkout (no package.json at $HERE)" >&2
   exit 1
+fi
+
+# Bootstrap bun if the build host doesn't provide it (don't depend on the
+# CodeBuild buildspec — its inline form can be reverted by unrelated deploys).
+if ! command -v bun >/dev/null 2>&1; then
+  echo "bun not found; bootstrapping bun ${BUN_VERSION}..." >&2
+  export BUN_INSTALL="${BUN_INSTALL:-/tmp/bun-runtime}"
+  curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}" >&2
+  export PATH="$BUN_INSTALL/bin:$PATH"
 fi
 
 cd "$HERE"
