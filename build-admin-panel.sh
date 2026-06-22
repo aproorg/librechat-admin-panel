@@ -23,7 +23,10 @@ fi
 
 cd "$HERE"
 bun install --frozen-lockfile
-bun run build:lambda:alb
+# --bun forces vite (a `#!/usr/bin/env node` bin) to run under bun. The build
+# host's ambient node may predate the CustomEvent global that vite 8's CLI
+# needs; bun has it. Mirrors the node-less oven/bun Docker image.
+bun run --bun build:lambda:alb
 
 mkdir -p "$OUT_DIR"
 rm -f "$OUT_ZIP"
