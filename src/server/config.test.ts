@@ -2,13 +2,6 @@ import { createRequire } from 'module';
 import { describe, it, expect } from 'vitest';
 import type * as t from '@/types';
 import {
-  coerceEnumValue,
-  getControlType,
-  getEnumOptions,
-  getArrayItemType,
-  splitUnionTypes,
-} from '@/components/configuration/utils';
-import {
   extractSchemaTree,
   getZodTypeName,
   flattenTree,
@@ -19,7 +12,15 @@ import {
   normalizeAppServiceKeys,
   mergeConfigArraySources,
   mergeIndexedArrayEntriesIntoBase,
+  applyLangfuseSchemaVisibility,
 } from './config';
+import {
+  coerceEnumValue,
+  getControlType,
+  getEnumOptions,
+  getArrayItemType,
+  splitUnionTypes,
+} from '@/components/configuration/utils';
 
 interface ZodV3Schema extends t.ZodSchemaLike {
   object: (shape: Record<string, ZodV3Schema>) => ZodV3Schema;
@@ -76,6 +77,57 @@ function findField(fields: t.SchemaField[], key: string): t.SchemaField | undefi
   }
   return undefined;
 }
+
+describe('applyLangfuseSchemaVisibility', () => {
+  it('injects the Langfuse section when fanout is enabled and the pinned schema lacks it', () => {
+    const tree = extractSchemaTree(z3.object({ interface: z3.object({ theme: z3.string() }) }));
+
+    applyLangfuseSchemaVisibility(tree, true);
+
+    expect(findField(tree, 'langfuse')).toMatchObject({
+      key: 'langfuse',
+      isObject: true,
+    });
+    expect(findField(tree, 'destination')?.path).toBe('langfuse.destination');
+  });
+
+  it('removes a Langfuse section supplied by the schema when fanout is disabled', () => {
+    const tree = extractSchemaTree(z3.object({ langfuse: z3.object({ enabled: z3.boolean() }) }));
+
+    applyLangfuseSchemaVisibility(tree, false);
+
+    expect(findField(tree, 'langfuse')).toBeUndefined();
+  });
+
+  it('preserves the schema-provided Langfuse section when fanout is enabled', () => {
+    const tree = extractSchemaTree(
+      z3.object({ langfuse: z3.object({ schemaOnlyField: z3.string() }) }),
+    );
+
+    applyLangfuseSchemaVisibility(tree, true);
+
+    expect(findField(tree, 'schemaOnlyField')).toBeDefined();
+    expect(tree.filter((field) => field.key === 'langfuse')).toHaveLength(1);
+  });
+
+  it('preserves a schema-provided Langfuse section when fanout state is unknown', () => {
+    const tree = extractSchemaTree(
+      z3.object({ langfuse: z3.object({ schemaOnlyField: z3.string() }) }),
+    );
+
+    applyLangfuseSchemaVisibility(tree, undefined);
+
+    expect(findField(tree, 'schemaOnlyField')).toBeDefined();
+  });
+
+  it('does not inject the compatibility shim when fanout state is unknown', () => {
+    const tree = extractSchemaTree(z3.object({ interface: z3.object({ theme: z3.string() }) }));
+
+    applyLangfuseSchemaVisibility(tree, undefined);
+
+    expect(findField(tree, 'langfuse')).toBeUndefined();
+  });
+});
 
 describe('extractSchemaTree', () => {
   it('extracts basic scalar types', () => {
@@ -1200,6 +1252,35 @@ describe('mergeIndexedArrayEntriesIntoBase', () => {
       },
     ]);
   });
+
+  it('strips secret preview companions from untouched array entries after merging', () => {
+    const result = mergeIndexedArrayEntriesIntoBase(
+      [
+        {
+          fieldPath: 'endpoints.custom.1',
+          value: { name: 'edited', baseURL: 'https://edited.example.com', apiKey: '' },
+        },
+      ],
+      {
+        endpoints: {
+          custom: [
+            { name: 'first', baseURL: 'https://first.example.com', apiKeyPreview: 'sk-...aaaa' },
+            { name: 'second', baseURL: 'https://second.example.com', apiKeyPreview: 'sk-...bbbb' },
+          ],
+        },
+      },
+    );
+
+    expect(result).toEqual([
+      {
+        fieldPath: 'endpoints.custom',
+        value: [
+          { name: 'first', baseURL: 'https://first.example.com' },
+          { name: 'edited', baseURL: 'https://edited.example.com', apiKey: '' },
+        ],
+      },
+    ]);
+  });
 });
 
 describe('validateFieldValue for endpoints', () => {
@@ -1247,6 +1328,18 @@ describe('validateFieldValue for endpoints', () => {
       dropParams: ['stop', 'frequency_penalty'],
     });
     expect(result).toEqual({ success: true });
+  });
+
+  it('includes the full path for nested array validation errors', () => {
+    const result = validateFieldValue('endpoints.custom', [
+      validEndpoint,
+      { ...validEndpoint, models: { fetch: true } },
+    ]);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'endpoints.custom[1].models.default: Required',
+    });
   });
 
   it('gracefully handles unknown deep paths', () => {

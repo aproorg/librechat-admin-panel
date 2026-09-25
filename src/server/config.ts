@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import yaml from 'js-yaml';
 import { queryOptions } from '@tanstack/react-query';
-import { configSchema } from 'librechat-data-provider';
 import { createServerFn } from '@tanstack/react-start';
+import { configSchema } from 'librechat-data-provider';
 import { SystemCapabilities } from '@librechat/data-schemas/capabilities';
 import type { AdminConfigResponse } from '@librechat/data-schemas';
 import type * as t from '@/types';
@@ -17,9 +17,56 @@ import {
   requireAllSectionCapabilities,
 } from './capabilities';
 import { BASE_CONFIG_PRINCIPAL_ID } from './constants';
+import { filterSecretPreviewFields, stripSecretPreviewValues } from '@/utils';
 import { safeFieldPath } from './utils/validation';
 import { flattenObject } from '@/utils/format';
 import { apiFetch } from './utils/api';
+
+/**
+ * Forward-compat shim: the pinned `librechat-data-provider@^0.8.509` predates the
+ * `langfuse` config group. Inject the section node so the custom renderer remains
+ * discoverable until a data-provider release containing the group is pinned. The
+ * renderer persists through LibreChat's dedicated Langfuse connection API.
+ */
+const LANGFUSE_SHIM_FIELD: t.SchemaField = {
+  path: 'langfuse',
+  key: 'langfuse',
+  type: 'object',
+  isOptional: true,
+  isNullable: false,
+  isArray: false,
+  isObject: true,
+  depth: 0,
+  children: (['enabled', 'destination', 'publicKey', 'secretKey', 'displaySecretKey'] as const).map(
+    (key) => ({
+      path: `langfuse.${key}`,
+      key,
+      type: key === 'enabled' ? 'boolean' : 'string',
+      isOptional: true,
+      isNullable: false,
+      isArray: false,
+      isObject: false,
+      depth: 1,
+    }),
+  ),
+};
+
+export function applyLangfuseSchemaVisibility(
+  tree: t.SchemaField[],
+  fanoutEnabled: boolean | undefined,
+): t.SchemaField[] {
+  const langfuseIndex = tree.findIndex((section) => section.key === 'langfuse');
+  if (fanoutEnabled === false) {
+    if (langfuseIndex >= 0) {
+      tree.splice(langfuseIndex, 1);
+    }
+    return tree;
+  }
+  if (fanoutEnabled === true && langfuseIndex < 0) {
+    tree.push(LANGFUSE_SHIM_FIELD);
+  }
+  return tree;
+}
 
 const WRAPPER_TYPES = new Set([
   'ZodOptional',
@@ -357,7 +404,7 @@ export function extractSchemaTree(
     }
   }
 
-  return fields;
+  return filterSecretPreviewFields(fields);
 }
 
 export function flattenTree(fields: t.SchemaField[]): t.SchemaField[] {
@@ -578,7 +625,14 @@ export function validateFieldValue(
       }
     ).safeParse(value);
     if (!result.success && result.error) {
-      const messages = result.error.issues.map((i) => i.message);
+      const messages = result.error.issues.map((issue) => {
+        const issuePath = issue.path.reduce(
+          (path, segment) =>
+            typeof segment === 'number' ? `${path}[${segment}]` : `${path}.${segment}`,
+          fieldPath,
+        );
+        return `${issuePath}: ${issue.message}`;
+      });
       return { success: false, error: messages.join('; ') || 'Validation failed' };
     }
   }
@@ -652,6 +706,11 @@ export const configSchemaTreeOptions = queryOptions({
 export const getConfigSchemaFields = createServerFn({ method: 'GET' }).handler(async () => {
   try {
     const tree = extractSchemaTree(configSchema);
+    const startupConfigResponse = await apiFetch('/api/config');
+    const startupConfig = startupConfigResponse.ok
+      ? ((await startupConfigResponse.json()) as { langfuseFanoutEnabled?: boolean })
+      : undefined;
+    applyLangfuseSchemaVisibility(tree, startupConfig?.langfuseFanoutEnabled);
     for (const section of tree) {
       if (section.key === 'interface' && section.children) {
         section.children = filterInterfacePermissionChildren(section.children);
@@ -930,6 +989,25 @@ export const baseConfigOptions = queryOptions({
   staleTime: 30_000,
 });
 
+let cachedSchemaPathSet: Set<string> | undefined;
+
+/**
+ * Index-free schema field paths (e.g. `endpoints.custom.apiKey`), memoized
+ * since the schema is static. `extractSchemaTree` bakes `[]`/`{}` markers
+ * into array/record element paths for its own tree-walking bookkeeping;
+ * strip them so paths match the plain dotted convention `secretPathForPreviewPath`
+ * and `stripSecretPreviewValues` expect.
+ */
+export function getSchemaPathSet(): Set<string> {
+  if (!cachedSchemaPathSet) {
+    const paths = flattenTree(extractSchemaTree(configSchema)).map((f) =>
+      f.path.replace(/\.(\[\]|\{\})/g, ''),
+    );
+    cachedSchemaPathSet = new Set(paths);
+  }
+  return cachedSchemaPathSet;
+}
+
 export function mergeIndexedArrayEntriesIntoBase(
   entries: Array<{ fieldPath: string; value: unknown }>,
   baseConfig: Record<string, t.ConfigValue>,
@@ -966,7 +1044,12 @@ export function mergeIndexedArrayEntriesIntoBase(
     for (const [idx, value] of updates) {
       arr[idx] = value;
     }
-    rest.push({ fieldPath: arrayPath, value: arr });
+    const strippedArr = stripSecretPreviewValues(
+      arr as t.ConfigValue[],
+      arrayPath,
+      getSchemaPathSet(),
+    );
+    rest.push({ fieldPath: arrayPath, value: strippedArr });
     mergedPaths?.add(arrayPath);
   }
 
@@ -1026,7 +1109,7 @@ export const saveBaseConfigFn = createServerFn({ method: 'POST' })
       }
     }
     if (errors.length > 0) {
-      const details = errors.map((e) => `${e.fieldPath}: ${e.error}`).join('; ');
+      const details = errors.map((e) => e.error).join('; ');
       throw new Error(`Validation failed — ${details}`);
     }
 
