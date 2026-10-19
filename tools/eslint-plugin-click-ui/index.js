@@ -28,6 +28,9 @@ module.exports = {
     'checkbox-radiogroup-controlled': require('./rules/checkbox-radiogroup-controlled'),
     'valid-provider-config': require('./rules/valid-provider-config'),
     'avoid-generic-label': require('./rules/avoid-generic-label'),
+    'require-button-html-type': require('./rules/require-button-html-type'),
+    'no-bare-icon-in-interactive': require('./rules/no-bare-icon-in-interactive'),
+    'no-legacy-arbitrary-variable': require('./rules/no-legacy-arbitrary-variable'),
   },
   configs: {
     recommended: {
@@ -56,6 +59,9 @@ module.exports = {
         'click-ui/checkbox-radiogroup-controlled': 'error',
         'click-ui/valid-provider-config': 'warn',
         'click-ui/avoid-generic-label': 'off',
+        'click-ui/require-button-html-type': 'error',
+        'click-ui/no-bare-icon-in-interactive': 'error',
+        'click-ui/no-legacy-arbitrary-variable': 'error',
       },
     },
     strict: {
@@ -84,6 +90,9 @@ module.exports = {
         'click-ui/checkbox-radiogroup-controlled': 'error',
         'click-ui/valid-provider-config': 'error',
         'click-ui/avoid-generic-label': 'warn',
+        'click-ui/require-button-html-type': 'error',
+        'click-ui/no-bare-icon-in-interactive': 'error',
+        'click-ui/no-legacy-arbitrary-variable': 'error',
       },
     },
   },
