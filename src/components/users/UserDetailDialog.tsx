@@ -17,8 +17,8 @@ import {
   roleAssignmentsQueryOptions,
   allRolesQueryOptions,
 } from '@/server';
+import { cn, errorText, notifySuccess, notifyError } from '@/utils';
 import { Avatar, TrashButton } from '@/components/shared';
-import { cn, notifySuccess, notifyError } from '@/utils';
 import { ConfirmDialog } from '@/components/access';
 import { useLocalize } from '@/hooks';
 
@@ -89,7 +89,7 @@ export function UserDetailDialog({
     queryClient.invalidateQueries({ queryKey: ['availableScopes'] });
   };
 
-  const handleError = (err: Error) => notifyError(err.message);
+  const handleError = (err: Error) => notifyError(errorText(err, err.message, localize));
 
   const addRoleMutation = useMutation({
     mutationFn: (role: { id: string; name: string }) => {
@@ -240,6 +240,7 @@ export function UserDetailDialog({
 
               {(canManageRoles || canManageGroups || canAssignConfigs) && (
                 <Button
+                  htmlType="button"
                   type="secondary"
                   label={localize('com_users_add_profiles')}
                   onClick={() => setView('add')}
@@ -501,7 +502,12 @@ function AddProfilesPanel({
         </div>
       )}
       <div className="flex justify-end">
-        <Button type="secondary" label={localize('com_ui_done')} onClick={onDone} />
+        <Button
+          htmlType="button"
+          type="secondary"
+          label={localize('com_ui_done')}
+          onClick={onDone}
+        />
       </div>
     </div>
   );

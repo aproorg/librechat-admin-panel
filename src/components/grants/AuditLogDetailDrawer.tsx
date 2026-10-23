@@ -1,18 +1,19 @@
 import * as Dialog from '@radix-ui/react-dialog';
-import { PrincipalType } from 'librechat-data-provider';
+import { Badge, Button, Icon } from '@clickhouse/click-ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Button, Icon, IconButton } from '@clickhouse/click-ui';
 import type { ReactElement } from 'react';
 import type * as t from '@/types';
 import {
   ACTION_BADGE_STATE,
   ACTION_LABEL_KEY,
-  auditCapability,
+  ACTION_SUMMARY_KEY,
+  auditGrantee,
+  auditSubject,
+  auditTargetConfig,
   capabilityLabel,
   formatTimestamp,
 } from './auditLogUtils';
-import { LoadingState } from '@/components/shared';
-import { getScopeTypeConfig } from '@/constants';
+import { CloseButton, DecorativeIcon, LoadingState } from '@/components/shared';
 import { useLocalize } from '@/hooks';
 import { cn } from '@/utils';
 
@@ -90,7 +91,7 @@ function CopyableMono({
       )}
     >
       <span>{value}</span>
-      <Icon name={copied ? 'check' : 'copy'} size="xs" />
+      <DecorativeIcon name={copied ? 'check' : 'copy'} size="xs" />
     </button>
   );
 }
@@ -237,13 +238,7 @@ export function AuditLogDetailDrawer({
               <span className="text-sm font-semibold text-(--cui-color-text-default)">
                 {localize('com_audit_detail_title')}
               </span>
-              <IconButton
-                icon="cross"
-                type="ghost"
-                size="sm"
-                aria-label={localize('com_audit_detail_close')}
-                onClick={onClose}
-              />
+              <CloseButton label={localize('com_audit_detail_close')} onClick={onClose} />
             </header>
             <div className="flex flex-1 items-center justify-center px-4 py-8">
               <LoadingState />
@@ -284,13 +279,7 @@ export function AuditLogDetailDrawer({
               <span className="text-sm font-semibold text-(--cui-color-text-default)">
                 {localize('com_audit_detail_title')}
               </span>
-              <IconButton
-                icon="cross"
-                type="ghost"
-                size="sm"
-                aria-label={localize('com_audit_detail_close')}
-                onClick={onClose}
-              />
+              <CloseButton label={localize('com_audit_detail_close')} onClick={onClose} />
             </header>
             <div className="flex flex-1 items-center justify-center px-4 py-8 text-center">
               <p className="text-sm text-(--cui-color-text-muted)">
@@ -298,7 +287,12 @@ export function AuditLogDetailDrawer({
               </p>
             </div>
             <footer className="flex items-center justify-end gap-2 border-t border-(--cui-color-stroke-default) px-4 py-3">
-              <Button type="primary" label={localize('com_audit_detail_close')} onClick={onClose} />
+              <Button
+                htmlType="button"
+                type="primary"
+                label={localize('com_audit_detail_close')}
+                onClick={onClose}
+              />
             </footer>
           </Dialog.Content>
         </Dialog.Portal>
@@ -336,13 +330,7 @@ export function AuditLogDetailDrawer({
               <span className="text-sm font-semibold text-(--cui-color-text-default)">
                 {localize('com_audit_detail_title')}
               </span>
-              <IconButton
-                icon="cross"
-                type="ghost"
-                size="sm"
-                aria-label={localize('com_audit_detail_close')}
-                onClick={onClose}
-              />
+              <CloseButton label={localize('com_audit_detail_close')} onClick={onClose} />
             </header>
             <div className="flex flex-1 items-center justify-center px-4 py-8 text-center">
               <p className="text-sm text-(--cui-color-text-muted)">
@@ -350,7 +338,12 @@ export function AuditLogDetailDrawer({
               </p>
             </div>
             <footer className="flex items-center justify-end gap-2 border-t border-(--cui-color-stroke-default) px-4 py-3">
-              <Button type="primary" label={localize('com_audit_detail_close')} onClick={onClose} />
+              <Button
+                htmlType="button"
+                type="primary"
+                label={localize('com_audit_detail_close')}
+                onClick={onClose}
+              />
             </footer>
           </Dialog.Content>
         </Dialog.Portal>
@@ -360,13 +353,10 @@ export function AuditLogDetailDrawer({
 
   if (!latestEntry) return null;
 
-  const targetConfig = getScopeTypeConfig(latestEntry.target.type as PrincipalType);
-  const capability = auditCapability(latestEntry);
+  const targetConfig = auditTargetConfig(latestEntry.target.type);
+  const subject = auditSubject(latestEntry, localize);
+  const grantee = auditGrantee(latestEntry);
   const targetLabel = latestEntry.target.name ?? latestEntry.target.id ?? '';
-  const summaryKey =
-    latestEntry.action === 'grant.assigned'
-      ? 'com_audit_detail_summary_assigned'
-      : 'com_audit_detail_summary_removed';
 
   const before = latestEntry.before ?? [];
   const after = latestEntry.after ?? [];
@@ -408,22 +398,17 @@ export function AuditLogDetailDrawer({
                 {localize('com_audit_detail_title')}
               </span>
             </div>
-            <IconButton
-              icon="cross"
-              type="ghost"
-              size="sm"
-              aria-label={localize('com_audit_detail_close')}
-              onClick={onClose}
-            />
+            <CloseButton label={localize('com_audit_detail_close')} onClick={onClose} />
           </header>
 
           <div className="flex-1 overflow-y-auto">
             <div className="flex flex-col gap-5 px-4 py-4">
               <p className="text-sm text-(--cui-color-text-default)">
-                {localize(summaryKey, {
+                {localize(ACTION_SUMMARY_KEY[latestEntry.action], {
                   actor: latestEntry.actor.name,
-                  capability: capabilityLabel(capability, localize),
+                  capability: subject.label,
                   target: targetLabel,
+                  grantee: grantee ? `${grantee.type} ${grantee.id}` : '',
                 })}
               </p>
 
@@ -479,13 +464,26 @@ export function AuditLogDetailDrawer({
                   </div>
                 </DetailRow>
 
+                {grantee && (
+                  <DetailRow label={localize('com_audit_detail_grantee')}>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-sm text-(--cui-color-text-default)">
+                        {grantee.type}
+                      </span>
+                      <CopyableMono
+                        value={grantee.id}
+                        ariaLabel={`Copy ${localize('com_audit_detail_grantee')} ID`}
+                        onCopyFailed={onCopyFailed}
+                      />
+                    </div>
+                  </DetailRow>
+                )}
+
                 <DetailRow label={localize('com_audit_detail_capability')}>
                   <div className="flex flex-col gap-0.5">
-                    <span className="text-sm text-(--cui-color-text-default)">
-                      {capabilityLabel(capability, localize)}
-                    </span>
+                    <span className="text-sm text-(--cui-color-text-default)">{subject.label}</span>
                     <CopyableMono
-                      value={capability}
+                      value={subject.value}
                       ariaLabel={`Copy ${localize('com_audit_detail_capability')}`}
                       onCopyFailed={onCopyFailed}
                     />
@@ -524,6 +522,7 @@ export function AuditLogDetailDrawer({
 
           <footer className="flex items-center justify-end gap-2 border-t border-(--cui-color-stroke-default) px-4 py-3">
             <Button
+              htmlType="button"
               type="secondary"
               iconLeft={copied ? 'check' : 'share'}
               label={
@@ -533,7 +532,12 @@ export function AuditLogDetailDrawer({
               }
               onClick={() => void handleCopyPermalinkClick()}
             />
-            <Button type="primary" label={localize('com_audit_detail_close')} onClick={onClose} />
+            <Button
+              htmlType="button"
+              type="primary"
+              label={localize('com_audit_detail_close')}
+              onClick={onClose}
+            />
           </footer>
         </Dialog.Content>
       </Dialog.Portal>
