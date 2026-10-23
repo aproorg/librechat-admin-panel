@@ -110,3 +110,132 @@ export function unflattenObject(flat: t.FlatConfigMap): Record<string, t.ConfigV
   }
   return result;
 }
+
+/** Whether a config value is a plain object (a section, entry or record). */
+export function isConfigRecord(value: t.ConfigValue): value is t.ConfigRecord {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** The value as an object, or an empty one. */
+export function asConfigRecord(value: t.ConfigValue): t.ConfigRecord {
+  return isConfigRecord(value) ? value : {};
+}
+
+/** Whether a value sets something: not unset, blank, or an empty list or object. */
+export function hasConfigValue(value: t.ConfigValue): boolean {
+  if (value === undefined || value === null || value === '') return false;
+  if (Array.isArray(value)) return value.length > 0;
+  return !isConfigRecord(value) || Object.keys(value).length > 0;
+}
+
+/** The value as text, untrimmed; `''` when it isn't text. */
+export function stringOf(value: t.ConfigValue): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/** The value as trimmed text; `''` when it isn't text. */
+export function trimmedText(value: t.ConfigValue): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/** The value when it is text that says something (not blank), else undefined. */
+export function filledText(value: t.ConfigValue): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined;
+}
+
+/** Whether the value is a list of strings. */
+export function isStringList(value: t.ConfigValue): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/** The strings of a list; anything else has none. */
+export function stringItems(value: t.ConfigValue): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string')
+    : [];
+}
+
+/** Value at a dot-path, stepping into arrays by index. */
+export function getValueAtPath(root: t.ConfigValue, path: string): t.ConfigValue {
+  let current: t.ConfigValue = root;
+  for (const segment of path.split('.')) {
+    if (Array.isArray(current)) {
+      current = current[Number(segment)];
+    } else if (isConfigRecord(current)) {
+      current = current[segment];
+    } else {
+      return undefined;
+    }
+  }
+  return current;
+}
+
+/** Deep equality for config values that ignores object key order. */
+export function isConfigValueEqual(a: t.ConfigValue, b: t.ConfigValue): boolean {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => isConfigValueEqual(item, b[i]));
+  }
+  if (!isConfigRecord(a) || !isConfigRecord(b)) return false;
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  return keys.every((key) => Object.hasOwn(b, key) && isConfigValueEqual(a[key], b[key]));
+}
+
+function setSegments(
+  current: t.ConfigValue,
+  segments: string[],
+  index: number,
+  value: t.ConfigValue,
+): t.ConfigValue {
+  if (index === segments.length) return value;
+  const segment = segments[index];
+  if (Array.isArray(current) && /^\d+$/.test(segment)) {
+    const next = [...current];
+    next[Number(segment)] = setSegments(next[Number(segment)], segments, index + 1, value);
+    return next;
+  }
+  const record = isConfigRecord(current) ? current : {};
+  return { ...record, [segment]: setSegments(record[segment], segments, index + 1, value) };
+}
+
+/**
+ * Copy of `root` with `value` at a dot-path, creating missing objects on the
+ * way and stepping into existing arrays by index (`undefined` stores
+ * `undefined`; use `removeValueAtPath` to delete).
+ */
+export function setValueAtPath(
+  root: t.ConfigRecord,
+  path: string,
+  value: t.ConfigValue,
+): t.ConfigRecord {
+  return setSegments(root, path.split('.'), 0, value) as t.ConfigRecord;
+}
+
+function removeSegments(current: t.ConfigValue, segments: string[], index: number): t.ConfigValue {
+  const segment = segments[index];
+  const last = index === segments.length - 1;
+  if (Array.isArray(current)) {
+    if (!/^\d+$/.test(segment) || Number(segment) >= current.length) return current;
+    const next = [...current];
+    if (last) next.splice(Number(segment), 1);
+    else next[Number(segment)] = removeSegments(next[Number(segment)], segments, index + 1);
+    return next;
+  }
+  if (!isConfigRecord(current) || !Object.hasOwn(current, segment)) return current;
+  const next = { ...current };
+  if (last) delete next[segment];
+  else next[segment] = removeSegments(next[segment], segments, index + 1);
+  return next;
+}
+
+/** Copy of `root` without the value at a dot-path (array items are spliced out). */
+export function removeValueAtPath(root: t.ConfigRecord, path: string): t.ConfigRecord {
+  return removeSegments(root, path.split('.'), 0) as t.ConfigRecord;
+}
+
+/** Whether `a` and `b` are the same path or one contains the other. */
+export function isRelatedPath(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}.`) || b.startsWith(`${a}.`);
+}

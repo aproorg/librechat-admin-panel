@@ -1,45 +1,46 @@
-import { PrincipalType } from 'librechat-data-provider';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { PrincipalType, ResourceType } from 'librechat-data-provider';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, DatePicker, Icon, Select, TextField } from '@clickhouse/click-ui';
+import { Badge, Button, DatePicker, Select, TextField } from '@clickhouse/click-ui';
 import type { AuditAction } from '@librechat/data-schemas';
 import type { AuditFilters } from '@/server';
 import type * as t from '@/types';
 import {
   ACTION_BADGE_STATE,
   ACTION_LABEL_KEY,
-  auditCapability,
+  auditSubject,
+  auditTargetConfig,
   buildEntryPermalink,
-  capabilityLabel,
   dateToIsoDate,
   formatTimestamp,
   isoDateToDate,
   localDayBoundaryIso,
 } from './auditLogUtils';
 import {
-  AUDIT_LOG_PAGE_SIZE,
-  auditLogEntryQueryOptions,
-  auditLogQueryOptions,
-  exportAuditLogServerFn,
-} from '@/server';
-import {
+  DecorativeIcon,
   EmptyState,
   LoadingState,
   Pagination,
   ScreenReaderAnnouncer,
   SearchInput,
 } from '@/components/shared';
+import {
+  AUDIT_LOG_PAGE_SIZE,
+  auditLogEntryQueryOptions,
+  auditLogQueryOptions,
+  exportAuditLogServerFn,
+} from '@/server';
 import { useAnnouncement, useDebouncedFilter, useLocalize } from '@/hooks';
-import { getScopeTypeConfig, isAuditEntryId } from '@/constants';
 import { AuditLogDetailDrawer } from './AuditLogDetailDrawer';
+import { AUDIT_ACTIONS, isAuditEntryId } from '@/constants';
 import { cn } from '@/utils';
 
-const AUDIT_ACTIONS: readonly AuditAction[] = ['grant.assigned', 'grant.removed'] as const;
-const TARGET_TYPE_OPTIONS: readonly PrincipalType[] = [
+const TARGET_TYPE_OPTIONS: readonly t.AuditTargetType[] = [
   PrincipalType.USER,
   PrincipalType.GROUP,
   PrincipalType.ROLE,
+  ResourceType.AGENT,
 ] as const;
 /** Radix `Select.Item` cannot use `value=""` (Radix reserves empty string for
  * "no selection"). Use a non-empty sentinel and translate to `''` in state. */
@@ -109,7 +110,7 @@ export function AuditLogTab() {
   const [dateTo, setDateTo] = useState('');
   /** Bumped each clear so DatePicker remounts and drops its internal selection state. */
   const [dateResetNonce, setDateResetNonce] = useState(0);
-  const [targetTypeFilter, setTargetTypeFilter] = useState<PrincipalType | ''>('');
+  const [targetTypeFilter, setTargetTypeFilter] = useState<t.AuditTargetType | ''>('');
 
   const [currentPage, setCurrentPage] = useState(1);
   const { message: announcement, announce } = useAnnouncement();
@@ -314,7 +315,11 @@ export function AuditLogTab() {
         announce(localize('com_a11y_copy_failed'));
         return false;
       }
-      const url = buildEntryPermalink(id, window.location.origin, import.meta.env.VITE_BASE_PATH || '');
+      const url = buildEntryPermalink(
+        id,
+        window.location.origin,
+        import.meta.env.VITE_BASE_PATH || '',
+      );
       try {
         await navigator.clipboard.writeText(url);
         return true;
@@ -409,6 +414,7 @@ export function AuditLogTab() {
               const selected = actionFilter.includes(act);
               return (
                 <Button
+                  htmlType="button"
                   key={act}
                   type={selected ? 'primary' : 'secondary'}
                   label={localize(ACTION_LABEL_KEY[act])}
@@ -458,6 +464,7 @@ export function AuditLogTab() {
           </div>
           {(dateFrom || dateTo) && (
             <Button
+              htmlType="button"
               type="danger"
               iconLeft="cross"
               label={localize('com_ui_clear')}
@@ -474,6 +481,7 @@ export function AuditLogTab() {
 
         <div className="flex flex-col items-end gap-1">
           <Button
+            htmlType="button"
             type="secondary"
             iconLeft="download"
             onClick={() => void handleExport()}
@@ -502,7 +510,7 @@ export function AuditLogTab() {
             label={localize('com_audit_filter_target_type')}
             value={targetTypeFilter === '' ? TARGET_TYPE_ALL : targetTypeFilter}
             onSelect={(v) => {
-              setTargetTypeFilter(v === TARGET_TYPE_ALL ? '' : (v as PrincipalType));
+              setTargetTypeFilter(v === TARGET_TYPE_ALL ? '' : (v as t.AuditTargetType));
               resetToFirstPage();
             }}
             placeholder={localize('com_ui_all')}
@@ -663,8 +671,8 @@ function AuditLogTableRow({
   onKeyDown: (e: React.KeyboardEvent<HTMLTableRowElement>) => void;
   localize: ReturnType<typeof useLocalize>;
 }) {
-  const targetConfig = getScopeTypeConfig(entry.target.type as PrincipalType);
-  const capability = auditCapability(entry);
+  const targetConfig = auditTargetConfig(entry.target.type);
+  const subject = auditSubject(entry, localize);
   return (
     <tr
       role="button"
@@ -673,7 +681,7 @@ function AuditLogTableRow({
       onClick={onActivate}
       onKeyDown={onKeyDown}
       className={cn(
-        'cursor-pointer bg-(--cui-color-background-panel) outline-none hover:bg-(--cui-color-background-hover) focus-visible:bg-(--cui-color-background-hover) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--cui-color-outline)',
+        'cursor-pointer bg-(--cui-color-background-panel) outline-none hover:bg-(--cui-color-background-hover) focus-visible:bg-(--cui-color-background-hover) focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-(--cui-color-outline) focus-visible:outline-solid',
         !isLast && 'border-b border-(--cui-color-stroke-default)',
       )}
     >
@@ -691,7 +699,7 @@ function AuditLogTableRow({
             state="neutral"
             text={
               <span className="inline-flex items-center gap-1">
-                <Icon name={targetConfig.icon} size="xs" />
+                <DecorativeIcon name={targetConfig.icon} size="xs" />
                 {localize(targetConfig.labelKey)}
               </span>
             }
@@ -703,11 +711,9 @@ function AuditLogTableRow({
       </td>
       <td className="px-4 py-3">
         <div className="flex flex-col">
-          <span className="text-(--cui-color-text-default)">
-            {capabilityLabel(capability, localize)}
-          </span>
+          <span className="text-(--cui-color-text-default)">{subject.label}</span>
           <span aria-hidden="true" className="text-[10px] text-(--cui-color-text-muted)">
-            {capability}
+            {subject.value}
           </span>
         </div>
       </td>

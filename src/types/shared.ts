@@ -1,5 +1,5 @@
 import type { AdminUserSearchResult } from '@librechat/data-schemas';
-import type { ReactNode, RefObject } from 'react';
+import type { ReactNode, RefObject, MutableRefObject } from 'react';
 import type { MenuIconName } from './scope';
 
 export interface ReorderableListHandle {
@@ -27,7 +27,15 @@ export interface KebabMenuItem {
   label: string;
   icon?: MenuIconName;
   danger?: boolean;
+  disabled?: boolean;
+  /** Why the item is disabled: shown under its label and read as its description. */
+  title?: string;
   onClick: () => void;
+}
+
+export interface KebabItemProps {
+  item: KebabMenuItem;
+  onChoose: () => void;
 }
 
 export interface KebabMenuProps {
@@ -60,10 +68,22 @@ export interface FormDialogProps {
   submitDisabled?: boolean;
   saving?: boolean;
   error?: string;
+  /** Muted footer text shown while there is no error (e.g. what is still needed to submit). */
+  hint?: string;
   size?: 'sm' | 'lg';
+  /** Set while the form holds typed input: closing first asks this ("Discard this new server?"). */
+  discardPrompt?: string;
+  /** False: Enter in a text field never submits (long forms, where Enter also commits list rows). */
+  submitOnEnter?: boolean;
   onSubmit: () => void;
   onClose: () => void;
   children: ReactNode;
+}
+
+export interface DiscardConfirmProps {
+  message: string;
+  onKeep: () => void;
+  onDiscard: () => void;
 }
 
 export interface LoadingStateProps {
@@ -93,13 +113,22 @@ export interface StickyActionBarProps {
   saveLabel: string;
   onDiscard: () => void;
   onSave: () => void;
-  message?: string;
+  message?: ReactNode;
+  /** Accessible name of the bar's region. */
+  label?: string;
 }
 
 export interface StatusToggleProps {
   id: string;
   isActive: boolean;
   onChange: (isActive: boolean) => void;
+  disabled?: boolean;
+}
+
+export interface CloseButtonProps {
+  onClick: () => void;
+  /** The accessible name and tooltip ("Close review"). */
+  label: string;
   disabled?: boolean;
 }
 
@@ -121,4 +150,17 @@ export interface UserSearchInlineProps {
   onAdd: (user: AdminUserSearchResult) => void;
   listboxId?: string;
   disabled?: boolean;
+}
+
+/** `useDiscardPrompt`: whether the discard prompt shows, and its actions. */
+export interface DiscardPromptState {
+  confirming: boolean;
+  /** The form whose fields Keep editing gives focus back to. */
+  formRef: MutableRefObject<HTMLElement | null>;
+  /** A close request: asks first, or (asked already) keeps editing. */
+  request: () => void;
+  /** Keep editing: hides the prompt and gives focus back to the form. */
+  keep: () => void;
+  /** Hides the prompt without moving focus (typing resumed, the form closed). */
+  dismiss: () => void;
 }
