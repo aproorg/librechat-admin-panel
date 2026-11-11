@@ -252,6 +252,7 @@ test.describe('Configuration: copy and move an MCP server between places', () =>
       const item = page.getByRole('menuitem', { name: /Move to…/ });
       await expect(item).toBeDisabled();
       await expect(item).toHaveAccessibleDescription(READ_ONLY_HINT);
+      await expect(page.getByRole('menuitem', { name: 'Copy to…' })).toBeEnabled();
     });
   });
 });

@@ -161,6 +161,19 @@ describe('useTransferOffer', () => {
       });
     });
 
+    it('stays on Base while the editing profile has no layer loaded yet', () => {
+      const data = valuesDataFixture(baseLayersFixture());
+      const scope = { selectScope: vi.fn(), index: getScopeIndex([]), editingScope: team };
+      const wrapper = ({ children }: { children: ReactNode }) => (
+        <ScopeActionsContext.Provider value={scope}>
+          <ConfigValuesProvider value={data}>{children}</ConfigValuesProvider>
+        </ScopeActionsContext.Provider>
+      );
+      const view = renderHook(() => useTransferOffer('mcpServers'), { wrapper });
+      act(() => itemFor(view.result.current.itemsFor(own), 'copy')?.onSelect());
+      expect(view.result.current.dialog.source).toEqual({ type: 'base' });
+    });
+
     it('closing clears the entry again', () => {
       const view = setup();
       act(() => itemFor(view.result.current.itemsFor(own), 'copy')?.onSelect());
