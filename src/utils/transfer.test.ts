@@ -648,18 +648,10 @@ describe('planCopy ops through the real write planner', () => {
     wanted: t.TransferTargetInput,
     stored: t.ConfigRecord,
     lower: t.ConfigRecord,
-  ) => {
-    const ops = planCopy(entry, wanted, {})?.ops ?? [];
-    return planConfigChanges(ops, { stored, tombstones: [], lower, lowerKind: 'inherited' });
-  };
-  const plan2 = (
-    entry: t.TransferEntry,
-    wanted: t.TransferTargetInput,
-    stored: t.ConfigRecord,
-    secrets: Record<string, string>,
+    secrets: Record<string, string> = {},
   ) => {
     const ops = planCopy(entry, wanted, secrets)?.ops ?? [];
-    return planConfigChanges(ops, { stored, tombstones: [], lower: {}, lowerKind: 'inherited' });
+    return planConfigChanges(ops, { stored, tombstones: [], lower, lowerKind: 'inherited' });
   };
   const custom = (...list: t.ConfigRecord[]): t.ConfigRecord => ({ endpoints: { custom: list } });
   const ownList = (after: t.ConfigRecord): t.ConfigValue =>
@@ -751,12 +743,38 @@ describe('planCopy ops through the real write planner', () => {
         secrets: ['apiKey'],
       };
       const ownKeyed = { name: 'K', apiKeyPreview: 'sk-…9', baseURL: 'https://old' };
-      const got = plan2(keyed, withCurrent(ownKeyed), custom(ownKeyed), { apiKey: 'typed-key' });
+      const got = plan(keyed, withCurrent(ownKeyed), custom(ownKeyed), {}, { apiKey: 'typed-key' });
       expect(got.issues).toEqual([]);
       const after = effective(got.storedAfter, undefined) as t.ConfigRecord;
       expect(after.apiKey).toBe('typed-key');
       expect(JSON.stringify(got.storedAfter)).not.toContain('Preview');
       expect(JSON.stringify(got.storedAfter)).not.toContain(MASKED_SECRET);
+    });
+
+    it('keep both with a shown entry given is the plain upsert of the new name, no baseline', () => {
+      const wanted = { ...target(['K'], ['K'], 'keepBoth'), current: ownK };
+      expect(planCopy(copied, wanted, {})?.ops).toEqual([
+        {
+          op: 'upsertEntry',
+          path: 'endpoints.custom',
+          key: 'K-copy',
+          identity: null,
+          value: { ...(copied.value as t.ConfigRecord), name: 'K-copy' },
+        },
+      ]);
+    });
+
+    it('no clash choice on an inherited name with a shown entry given is the override upsert, no baseline', () => {
+      const wanted = { ...target([], ['K']), current: lowerK };
+      expect(planCopy(copied, wanted, {})?.ops).toEqual([
+        {
+          op: 'upsertEntry',
+          path: 'endpoints.custom',
+          key: 'K',
+          identity: 'K',
+          value: copied.value,
+        },
+      ]);
     });
 
     it('ignores the shown entry for a record entry', () => {
