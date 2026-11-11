@@ -44,6 +44,13 @@ vi.mock('@/server', () => ({
           priority: 10,
           isActive: true,
         },
+        {
+          principalType: PrincipalType.ROLE,
+          principalId: 'USER',
+          name: 'USER',
+          priority: 1,
+          isActive: true,
+        },
       ]),
   },
 }));
@@ -77,15 +84,19 @@ const YAML: t.ConfigRecord = {
   fileConfig: { endpoints: { fromfile: { fileLimit: 5 } } },
   endpoints: { custom: [{ name: 'FromFile', baseURL: 'https://file.example.com' }] },
 };
+const NESTED = { a: { customUserVars: { TOKEN: { title: 'Token' } } } };
+const DOTTED = { 'gpt-4.1': { fileLimit: 3 } };
 const OVERRIDES: t.ConfigRecord = {
-  fileConfig: { endpoints: { mine: { fileLimit: 2 } } },
+  mcpServers: NESTED,
+  fileConfig: { endpoints: { mine: { fileLimit: 2 }, ...DOTTED } },
   endpoints: {
     custom: [{ name: 'Mine', baseURL: 'https://mine.example.com', apiKeyPreview: '••••1234' }],
   },
   modelSpecs: { list: [{ name: 'spec-a', label: 'Spec A' }] },
 };
 const MERGED: t.ConfigRecord = {
-  fileConfig: { endpoints: { fromfile: { fileLimit: 5 }, mine: { fileLimit: 2 } } },
+  mcpServers: NESTED,
+  fileConfig: { endpoints: { fromfile: { fileLimit: 5 }, mine: { fileLimit: 2 }, ...DOTTED } },
   endpoints: {
     custom: [
       { name: 'FromFile', baseURL: 'https://file.example.com' },
@@ -110,16 +121,28 @@ const profileData: t.ResolvedConfigData = {
   tombstones: [],
 };
 
+const overridingData: t.ResolvedConfigData = {
+  ...profileData,
+  overrides: {
+    fileConfig: { endpoints: { mine: { fileLimit: 9 } } },
+    endpoints: { custom: [{ name: 'Mine', baseURL: 'https://profile.example.com' }] },
+  },
+};
+
 interface PageProps {
   children: ReactNode;
   inProfile?: boolean;
+  overriding?: boolean;
   dirty?: boolean;
 }
 
-function Page({ children, inProfile = false, dirty = false }: PageProps) {
-  const layers = inProfile
-    ? scopeLayersFixture(profileData, baseData)
-    : baseLayersFixture(baseData);
+function layersOf(inProfile: boolean, overriding = false): t.ValueLayers {
+  if (!inProfile) return baseLayersFixture(baseData);
+  return scopeLayersFixture(overriding ? overridingData : profileData, baseData);
+}
+
+function Page({ children, inProfile = false, overriding = false, dirty = false }: PageProps) {
+  const layers = layersOf(inProfile, overriding);
   const data = { ...valuesDataFixture(layers), isDirty: dirty };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const scope = {
@@ -136,18 +159,14 @@ function Page({ children, inProfile = false, dirty = false }: PageProps) {
   );
 }
 
-function layersOf(inProfile: boolean): t.ValueLayers {
-  return inProfile ? scopeLayersFixture(profileData, baseData) : baseLayersFixture(baseData);
-}
-
-function RecordList(props: Omit<PageProps, 'children'> & { disabled?: boolean }) {
-  const { disabled, ...page } = props;
-  const value = getValueAtPath(layersOf(page.inProfile ?? false).effective, RECORD_PATH);
+function RecordList(props: Omit<PageProps, 'children'> & { disabled?: boolean; path?: string }) {
+  const { disabled, path = RECORD_PATH, ...page } = props;
+  const value = getValueAtPath(layersOf(page.inProfile ?? false, page.overriding).effective, path);
   return (
     <Page {...page}>
       <RecordObjectField
         id="record"
-        path={RECORD_PATH}
+        path={path}
         value={value}
         fields={noFields}
         onChange={vi.fn()}
@@ -163,7 +182,7 @@ function ListOf({
   ...page
 }: Omit<PageProps, 'children'> & { path: string; disabled?: boolean }) {
   const { disabled, ...rest } = page;
-  const value = getValueAtPath(layersOf(rest.inProfile ?? false).effective, path);
+  const value = getValueAtPath(layersOf(rest.inProfile ?? false, rest.overriding).effective, path);
   return (
     <Page {...rest}>
       <ArrayObjectField
@@ -184,9 +203,12 @@ const cardOf = (name: string): HTMLElement => {
   if (!card) throw new Error(`no card for ${name}`);
   return card;
 };
-const copyOf = (name: string) => within(cardOf(name)).queryByRole('button', { name: 'Copy to…' });
-const moveOf = (name: string) => within(cardOf(name)).queryByRole('button', { name: 'Move to…' });
-const reasonOf = (button: HTMLElement | null) => button?.getAttribute('title');
+const copyOf = (name: string) =>
+  within(cardOf(name)).queryByRole('button', { name: `Copy to… ${name}` });
+const moveOf = (name: string) =>
+  within(cardOf(name)).queryByRole('button', { name: `Move to… ${name}` });
+const reasonOf = (button: HTMLElement | null) =>
+  document.getElementById(button?.getAttribute('aria-describedby') ?? '')?.textContent;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -307,6 +329,67 @@ describe('Copy to and Move to on a by-name list entry', () => {
     render(<ListOf path={CUSTOM_PATH} disabled />);
     expect(reasonOf(moveOf('Mine'))).toBe(READ_ONLY);
     expect(copyOf('Mine')).toBeEnabled();
+  });
+});
+
+describe('a profile that overrides an entry Base also has', () => {
+  it('enables Move on a record entry', () => {
+    render(<RecordList inProfile overriding />);
+    expect(moveOf('mine')).toBeEnabled();
+    expect(copyOf('mine')).toBeEnabled();
+  });
+
+  it('enables Move on a by-name list entry', () => {
+    render(<ListOf path={CUSTOM_PATH} inProfile overriding />);
+    expect(moveOf('Mine')).toBeEnabled();
+    expect(copyOf('Mine')).toBeEnabled();
+  });
+
+  it('opens the dialog from the profile: Base is offered, the open profile is not', async () => {
+    render(<RecordList inProfile overriding />);
+    fireEvent.click(moveOf('mine')!);
+    expect(await screen.findByRole('checkbox', { name: /Base configuration/ })).toBeVisible();
+    expect(screen.getByRole('checkbox', { name: /Team a/ })).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: /USER/ })).not.toBeInTheDocument();
+  });
+
+  it('opens the dialog from Base: the profile is offered, Base is not', async () => {
+    render(<RecordList />);
+    fireEvent.click(moveOf('mine')!);
+    expect(await screen.findByRole('checkbox', { name: /USER/ })).toBeVisible();
+    expect(screen.queryByRole('checkbox', { name: /Base configuration/ })).not.toBeInTheDocument();
+  });
+});
+
+describe('accessible names and reasons of the actions', () => {
+  it('names each action after its entry and describes why it is disabled', () => {
+    render(<RecordList dirty />);
+    expect(copyOf('mine')).toHaveAccessibleName('Copy to… mine');
+    expect(moveOf('fromfile')).toHaveAccessibleDescription(FILE);
+    expect(moveOf('mine')).toHaveAccessibleDescription(UNSAVED);
+  });
+});
+
+describe('records the actions do not belong on', () => {
+  it('shows none on a record nested inside an entry, while the top-level record shows them', () => {
+    render(
+      <>
+        <RecordList path="mcpServers.a.customUserVars" />
+        <RecordList />
+      </>,
+    );
+    expect(screen.getByText('TOKEN')).toBeVisible();
+    expect(copyOf('TOKEN')).toBeNull();
+    expect(moveOf('TOKEN')).toBeNull();
+    expect(copyOf('mine')).toBeEnabled();
+  });
+
+  it('shows none on an entry whose name has a dot, while its siblings show them', () => {
+    render(<RecordList />);
+    expect(screen.getByText('gpt-4.1')).toBeVisible();
+    expect(copyOf('gpt-4.1')).toBeNull();
+    expect(moveOf('gpt-4.1')).toBeNull();
+    expect(copyOf('mine')).toBeEnabled();
   });
 });
 

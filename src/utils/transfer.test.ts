@@ -91,6 +91,28 @@ describe('transferEligibility', () => {
     });
   });
 
+  it('offers nothing for a record nested inside a record entry', () => {
+    expect(transferEligibility('mcpServers.a.customUserVars', origin)).toEqual({
+      copy: false,
+      move: false,
+    });
+  });
+
+  it('offers nothing for a record nested inside a keyed-list entry', () => {
+    expect(transferEligibility('endpoints.custom.Mine.headers', origin)).toEqual({
+      copy: false,
+      move: false,
+    });
+  });
+
+  it('still offers a top-level record and the Azure groups', () => {
+    expect(transferEligibility('fileConfig.endpoints', origin)).toEqual({ copy: true, move: true });
+    expect(transferEligibility('endpoints.azureOpenAI.groups', origin)).toEqual({
+      copy: true,
+      move: true,
+    });
+  });
+
   it('blocks move for a file entry but keeps copy', () => {
     expect(transferEligibility('mcpServers', { ...origin, fromFile: true })).toEqual({
       copy: true,

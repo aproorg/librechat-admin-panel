@@ -383,19 +383,28 @@ export function ObjectEntryCard({
             <DecorativeIcon name="arrow-down" size="sm" />
           </button>
         )}
-        {transferActions?.map((action) => (
-          <button
-            key={action.id}
-            type="button"
-            onClick={action.onSelect}
-            disabled={action.disabled}
-            className={ACTION_CLASSES}
-            aria-label={action.label}
-            title={action.reason ?? action.label}
-          >
-            <DecorativeIcon name={action.id === 'copy' ? 'copy' : 'arrow-right'} size="sm" />
-          </button>
-        ))}
+        {transferActions?.map((action) => {
+          const reasonId = `${baseId}-${action.id}-reason`;
+          return (
+            <button
+              key={action.id}
+              type="button"
+              onClick={action.onSelect}
+              disabled={action.disabled}
+              className={ACTION_CLASSES}
+              aria-label={`${action.label} ${entryKey}`}
+              aria-describedby={action.reason ? reasonId : undefined}
+              title={action.reason ?? action.label}
+            >
+              <DecorativeIcon name={action.id === 'copy' ? 'copy' : 'arrow-right'} size="sm" />
+              {action.reason && (
+                <span id={reasonId} className="sr-only">
+                  {action.reason}
+                </span>
+              )}
+            </button>
+          );
+        })}
         {!disabled && lockedNote && (
           <span
             className={cn(ACTION_CLASSES, 'cursor-default hover:bg-transparent')}

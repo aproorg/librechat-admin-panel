@@ -38,11 +38,24 @@ function moveBlockOf(origin: {
   return undefined;
 }
 
-/** What an entry's actions offer. Lists a profile replaces whole, and positional lists, offer nothing. */
+/** Whether a proper prefix of `path` is a record or a list, so `path` lies inside one of its entries. */
+function isInsideEntry(path: string): boolean {
+  const segments = path.split('.');
+  return segments.slice(1).some((_, i) => {
+    const prefix = segments.slice(0, i + 1);
+    if (getKeyedCollection(prefix.join('.'))) return true;
+    const schema = resolveSubSchema(configSchema as t.ZodSchemaLike, prefix);
+    const type = schema ? schemaType(unwrapSchema(schema)) : undefined;
+    return type === 'record' || type === 'array';
+  });
+}
+
+/** What an entry's actions offer. Lists a profile replaces whole, positional lists, and collections nested inside another collection's entry, offer nothing. */
 export function transferEligibility(
   path: string,
   origin: { fromFile: boolean; own: boolean; writable: boolean },
 ): t.TransferEligibility {
+  if (isInsideEntry(path)) return { copy: false, move: false };
   const collection = getKeyedCollection(path);
   const replaced = collection ? collection.merge === 'replace' : isPositionalList(path);
   if (replaced) return { copy: false, move: false };
