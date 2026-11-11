@@ -297,7 +297,10 @@ const FEDERATED_LOGIN_BLOCKED = [
   },
 ];
 
-const ADMIN_TOKENS = new Set(['test-admin-token', 'test-admin-token-2fa']);
+const READER_TOKEN = 'test-reader-token';
+const ADMIN_TOKENS = new Set(['test-admin-token', 'test-admin-token-2fa', READER_TOKEN]);
+/** A signed-in admin who can read the configuration but not change it. */
+const READER_EMAIL = 'reader@test.com';
 
 /** The refusal LibreChat answers a request without a valid admin token with, or `null`. */
 function authFailure(req) {
@@ -332,6 +335,11 @@ const configDoc = (principalType, principalId, overrides) => ({
   createdAt: new Date(SEEDED_AT).toISOString(),
   updatedAt: new Date(SEEDED_AT).toISOString(),
 });
+
+/** What librechat.yaml defines: a server Base shows but its admin document does not store. */
+const YAML_CONFIG = {
+  mcpServers: { filed: { type: 'streamable-http', url: 'https://file.example.com/mcp' } },
+};
 
 const configDocs = [
   configDoc(PrincipalType.ROLE, BASE_CONFIG_ID, {
@@ -375,7 +383,7 @@ const handlers = {
     return [
       200,
       {
-        token: 'test-admin-token',
+        token: body.email === READER_EMAIL ? READER_TOKEN : 'test-admin-token',
         user: {
           id: 'u_test',
           email: body.email,
@@ -610,10 +618,13 @@ const handlers = {
     const { page, ...rest } = paginate(grants, query);
     return [200, { grants: page, ...rest }];
   }),
-  'GET /api/admin/grants/effective': admin(() => [
-    200,
-    { capabilities: Object.values(SystemCapabilities) },
-  ]),
+  'GET /api/admin/grants/effective': admin((_body, req) => {
+    const isReader = req.headers.authorization === `Bearer ${READER_TOKEN}`;
+    const capabilities = Object.values(SystemCapabilities).filter(
+      (capability) => !isReader || capability !== SystemCapabilities.MANAGE_CONFIGS,
+    );
+    return [200, { capabilities }];
+  }),
   'GET /api/admin/grants/:principalType/:principalId': admin(
     (_body, _req, { principalType, principalId }) => {
       if (principalType !== PrincipalType.ROLE) return INVALID_PRINCIPAL_TYPE;
@@ -677,8 +688,9 @@ const handlers = {
   ]),
   'GET /api/admin/config/base': admin((_body, _req, _params, query) => {
     const { overrides } = findConfigDoc(PrincipalType.ROLE, BASE_CONFIG_ID);
-    const effective = query.get('baseOnly') === 'true' ? {} : overrides;
-    return [200, { config: { config: {}, ...effective } }];
+    if (query.get('baseOnly') === 'true') return [200, { config: { config: {}, ...YAML_CONFIG } }];
+    const mcpServers = { ...YAML_CONFIG.mcpServers, ...overrides.mcpServers };
+    return [200, { config: { config: {}, ...overrides, mcpServers } }];
   }),
   'GET /api/admin/config/:principalType/:principalId': admin(
     (_body, _req, { principalType, principalId }) => {
@@ -691,6 +703,19 @@ const handlers = {
       const config = findConfigDoc(principalType, principalId);
       if (!config) return [404, { error: 'Not found' }];
       body.entries.forEach(({ fieldPath, value }) => setAtPath(config.overrides, fieldPath, value));
+      config.revision = String(Number(config.revision) + 1);
+      return [200, { config }];
+    },
+  ),
+  'DELETE /api/admin/config/:principalType/:principalId/fields': admin(
+    (_body, _req, { principalType, principalId }, query) => {
+      const config = findConfigDoc(principalType, principalId);
+      if (!config) return [404, { error: 'Not found' }];
+      const keys = (query.get('fieldPath') ?? '').split('.');
+      const last = keys.pop();
+      const parent = keys.reduce((node, key) => node?.[key], config.overrides);
+      if (!parent || !(last in parent)) return [404, { error: 'Not found' }];
+      delete parent[last];
       config.revision = String(Number(config.revision) + 1);
       return [200, { config }];
     },

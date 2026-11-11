@@ -11,6 +11,7 @@ import {
   setValueAtPath,
   removeValueAtPath,
   isCarriableRename,
+  transferEligibility,
   findMovedServerCredentials,
 } from '@/utils';
 import {
@@ -39,6 +40,11 @@ import { McpNote } from './Note';
 
 const EMPTY_RECORD: t.ConfigRecord = Object.freeze({}) as t.ConfigRecord;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
+const MOVE_BLOCKED_REASONS: Readonly<Record<t.MoveBlock, string>> = {
+  readOnly: 'com_config_transfer_blocked_read_only',
+  file: 'com_config_transfer_blocked_file',
+  inherited: 'com_config_transfer_blocked_inherited',
+};
 const NO_MOVED_CREDENTIALS: ReadonlyMap<string, ReadonlyMap<string, t.MovedCredential>> = new Map();
 
 /** A server's source badge, by edit target and whether the layer beneath defines it. */
@@ -178,7 +184,11 @@ export function McpServersRenderer({
   const [createOpen, setCreateOpen] = useState(false);
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [transferKey, setTransferKey] = useState<string | null>(null);
+  const [transfer, setTransfer] = useState<{
+    key: string;
+    mode: t.TransferMode;
+    value: t.ConfigValue;
+  } | null>(null);
   const [unlocked, setUnlocked] = useState<ReadonlySet<string>>(EMPTY_KEYS);
   const [lastDeleted, setLastDeleted] = useState<string | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -590,13 +600,30 @@ export function McpServersRenderer({
     return overrideNotes.moved(key, { lower: lower[key], before: saved[key], after: value });
   };
 
-  const transferValue = transferKey === null ? undefined : saved[transferKey];
-
   const actionsFor = (key: string, value: t.ConfigRecord, overrides: number) => {
     const actions: t.McpServerAction[] = [];
-    if (disabled || key.includes('.')) return actions;
+    if (key.includes('.')) return actions;
     const isLower = lowerKeys.has(key);
     const isYaml = yamlKeys.has(key);
+    const eligibility = transferEligibility(path, {
+      fromFile: isYaml,
+      own: !isLower || overrides > 0,
+      writable: !disabled,
+    });
+    const isStdio = transportOf(value) === 'stdio';
+    const moveReason = ((): string | undefined => {
+      if (isStdio) return localize('com_config_mcp_transport_stdio_desc');
+      if (eligibility.moveBlocked) return localize(MOVE_BLOCKED_REASONS[eligibility.moveBlocked]);
+      return valuesData?.isDirty === true ? localize('com_config_transfer_unsaved') : undefined;
+    })();
+    const moveAction: t.McpServerAction = {
+      id: 'duplicate',
+      label: localize('com_config_transfer_title_move'),
+      onSelect: () => setTransfer({ key, mode: 'move', value: saved[key] }),
+      disabled: moveReason !== undefined,
+      reason: moveReason,
+    };
+    if (disabled) return eligibility.moveBlocked ? [moveAction] : actions;
     const ownerReason = (() => {
       if (!inScope) return localize('com_config_mcp_locked_yaml');
       if (!isYaml) return localize('com_config_mcp_defined_in_base');
@@ -607,7 +634,6 @@ export function McpServersRenderer({
           : 'com_config_mcp_defined_in_base_yaml',
       );
     })();
-    const isStdio = transportOf(value) === 'stdio';
     /** A stdio server from the layer beneath has nothing to offer: its read-only note says why. */
     if (isStdio && isLower) return actions;
     const isInheritedLocked =
@@ -640,10 +666,11 @@ export function McpServersRenderer({
     actions.push({
       id: 'duplicate',
       label: localize('com_config_transfer_title_copy'),
-      onSelect: () => setTransferKey(key),
+      onSelect: () => setTransfer({ key, mode: 'copy', value: saved[key] }),
       disabled: transferReason !== undefined,
       reason: transferReason,
     });
+    if (eligibility.move || eligibility.moveBlocked) actions.push(moveAction);
     if (isLower && overrides > 0) {
       actions.push({
         id: 'revert',
@@ -984,18 +1011,18 @@ export function McpServersRenderer({
           );
         })}
         <TransferDialog
-          open={transferValue !== undefined}
-          mode="copy"
+          open={transfer !== null}
+          mode={transfer?.mode ?? 'copy'}
           entry={{
             path,
-            key: transferKey ?? '',
-            value: transferValue ?? EMPTY_RECORD,
-            secrets: storedSecrets(transferValue),
+            key: transfer?.key ?? '',
+            value: transfer?.value ?? EMPTY_RECORD,
+            secrets: storedSecrets(transfer?.value),
           }}
           source={
             editingScope && inScope ? { type: 'scope', scope: editingScope } : { type: 'base' }
           }
-          onClose={() => setTransferKey(null)}
+          onClose={() => setTransfer(null)}
         />
         <CreateMcpServerDialog
           open={createOpen}
