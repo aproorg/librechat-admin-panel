@@ -104,7 +104,7 @@ function namesOf(
   };
 }
 
-/** The names each ticked target holds and shows, by key; a target whose layers are loading or failed has none. */
+/** The names each ticked target holds and shows, by key (none while its layers load or fail); `lowerShows` is whether Base also has the entry the open profile would give up. */
 function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry, readsLower: boolean) {
   const rules = useConfigWriteRules();
   const { keyedTombstones } = useConfigFeatures();
@@ -476,7 +476,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
             )}
           </>
         )}
-        {lowerShows && (
+        {lowerShows && !transfer.originalKept && (
           <p data-testid="transfer-lower" className="m-0 text-sm wrap-anywhere">
             {localize('com_config_transfer_lower_shows', { name: entry.key })}
           </p>

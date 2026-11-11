@@ -719,7 +719,7 @@ describe('TransferDialog', () => {
 
   describe('the entry from below showing again', () => {
     const inBase = { config: { mcpServers: { Notes: { url: 'x' } } }, dbOverrides: {} };
-    const line = /The Notes entry from below will show here again/;
+    const line = /The Notes entry from Base will show here again/;
     const mine = { type: 'scope', scope: profile('a') } as const;
     const open = async (source: t.WriteTarget, mode: t.TransferMode = 'move') => {
       renderDialog(source, undefined, { mode });
@@ -742,21 +742,21 @@ describe('TransferDialog', () => {
       scopes.base = { config: { mcpServers: { Other: { url: 'x' } } }, dbOverrides: {} };
       await open(mine);
       await tick(/Team b/);
-      expect(screen.queryByText(/from below will show/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/from Base will show/)).not.toBeInTheDocument();
     });
 
     it('says nothing for a copy', async () => {
       scopes.base = inBase;
       await open(mine, 'copy');
       await tick(/Team b/);
-      expect(screen.queryByText(/from below will show/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/from Base will show/)).not.toBeInTheDocument();
     });
 
     it('says nothing when the open place is Base', async () => {
       scopes.base = inBase;
       await open({ type: 'base' });
       await tick(/Team a/);
-      expect(screen.queryByText(/from below will show/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/from Base will show/)).not.toBeInTheDocument();
     });
 
     it('still says so after the move is saved', async () => {
@@ -766,6 +766,20 @@ describe('TransferDialog', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Move' }));
       await screen.findByText(/Original in Group: Team a/);
       expect(screen.getByText(line)).toBeVisible();
+    });
+    it('says nothing once the original was kept because the copy failed', async () => {
+      scopes.base = inBase;
+      applyMock.mockResolvedValueOnce({
+        ...ok(),
+        applied: 0,
+        failed: [{ path: 'mcpServers.Notes', message: 'boom' }],
+      });
+      await open(mine);
+      await tick(/Team b/);
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      expect(await screen.findByTestId('transfer-kept')).toBeVisible();
+      expect(screen.queryByTestId('transfer-lower')).not.toBeInTheDocument();
+      expect(screen.queryByText(line)).not.toBeInTheDocument();
     });
   });
 
