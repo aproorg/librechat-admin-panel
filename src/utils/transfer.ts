@@ -1,8 +1,14 @@
 import { configSchema } from 'librechat-data-provider';
 import type * as t from '@/types';
 import { schemaType, unwrapSchema, resolveSubSchema } from './schema';
-import { flattenObject, isConfigRecord, removeValueAtPath, setValueAtPath } from './format';
-import { getKeyedCollection } from './collections';
+import {
+  flattenObject,
+  isConfigRecord,
+  getValueAtPath,
+  removeValueAtPath,
+  setValueAtPath,
+} from './format';
+import { entriesByKey, getKeyedCollection } from './collections';
 import { isSameScope } from './scopes';
 import { MASKED_SECRET, secretPreviewPath } from './secrets';
 
@@ -106,9 +112,23 @@ function assertAddressable(path: string, key: string): void {
   if (key.includes('.')) throw new Error(`${path}: "${key}" has a dot, no path can address it`);
 }
 
-/** The writes that take `entry` out of the place it is in, as deleting it there emits them. */
+/** The entry `key` of the record or by-name list at `path` in `root`, if that layer holds it. */
+export function entryOf(root: t.ConfigValue, path: string, key: string): t.ConfigValue {
+  const at = getValueAtPath(root, path);
+  const collection = getKeyedCollection(path);
+  if (collection) return entriesByKey(at, collection.key).get(key);
+  return isConfigRecord(at) && Object.hasOwn(at, key) ? at[key] : undefined;
+}
+
+/** The writes that take `entry` out of the place it is in, as deleting it there emits them. An override of an entry the layer below has (`entry.lower`) is dropped by writing the lower entry back, so the lower one shows again. */
 export function planRemoval(entry: t.TransferEntry): t.ConfigChange[] {
   const collection = getKeyedCollection(entry.path);
+  if (collection && entry.lower !== undefined) {
+    const { key, lower, value: baseline } = entry;
+    return [
+      { op: 'upsertEntry', path: collection.path, key, identity: key, baseline, value: lower },
+    ];
+  }
   if (collection) {
     return [{ op: 'removeEntry', path: collection.path, key: entry.key, identity: entry.key }];
   }
@@ -116,7 +136,7 @@ export function planRemoval(entry: t.TransferEntry): t.ConfigChange[] {
   return [{ op: 'reset', path: `${entry.path}.${entry.key}` }];
 }
 
-/** The writes that put `entry` in one target, as today's create flow emits them. `secrets` holds the typed value of each of `entry.secrets`, by leaf path. */
+/** The writes that put `entry` in one target, or null when the clash choice is skip. A replace of a keyed-list entry sends the shown entry as baseline; without one it clears the old entry first. `secrets` holds the typed value of each of `entry.secrets`, by leaf path. */
 export function planCopy(
   entry: t.TransferEntry,
   input: t.TransferTargetInput,
@@ -139,7 +159,7 @@ export function planCopy(
     withoutMask(hidden.reduce(removeValueAtPath, isConfigRecord(entry.value) ? entry.value : {})),
   );
   const step = (ops: t.ConfigChange[]): t.TransferStep => ({ target: input.target, key, ops });
-  const cleared = input.clash === 'replace' ? planRemoval(entry) : [];
+  const cleared = input.clash === 'replace' ? planRemoval({ ...entry, lower: undefined }) : [];
   const inherited =
     input.clash !== 'replace' && !input.ownKeys.has(key) && input.shownKeys.has(key);
   const identity = inherited ? key : null;

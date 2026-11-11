@@ -717,6 +717,26 @@ describe('TransferDialog', () => {
     });
   });
 
+  describe('notes about other profiles that override the entry', () => {
+    const notes = ['Team a keeps its own Notes override'];
+    const tickTarget = async () => {
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /Move|Copy/ })).toBeEnabled());
+    };
+
+    it('shows them before a move confirms', async () => {
+      renderDialog({ type: 'base' }, undefined, { mode: 'move', notes });
+      await tickTarget();
+      expect(screen.getByText(notes[0])).toBeVisible();
+    });
+
+    it('shows none for a copy', async () => {
+      renderDialog({ type: 'base' }, undefined, { mode: 'copy', notes });
+      await tickTarget();
+      expect(screen.queryByText(notes[0])).not.toBeInTheDocument();
+    });
+  });
+
   describe('the entry from below showing again', () => {
     const inBase = { config: { mcpServers: { Notes: { url: 'x' } } }, dbOverrides: {} };
     const line = /The Notes entry from Base will show here again/;
@@ -736,6 +756,29 @@ describe('TransferDialog', () => {
       expect(await screen.findByText(line)).toBeVisible();
       await tick(/Team b/);
       expect(screen.getByText(line)).toBeVisible();
+    });
+
+    it('removes a profile override of a keyed entry by writing the entry below back', async () => {
+      const lowerK = { name: 'K', baseURL: 'https://low' };
+      const shown = { name: 'K', baseURL: 'https://own' };
+      scopes.base = { config: { endpoints: { custom: [lowerK] } }, dbOverrides: {} };
+      renderDialog(mine, undefined, {
+        mode: 'move',
+        entry: { path: 'endpoints.custom', key: 'K', value: shown, secrets: [] },
+      });
+      await tick(/Team b/);
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      await screen.findByText(/Original in Group: Team a/);
+      expect(applyMock.mock.calls[1][0].data.ops).toEqual([
+        {
+          op: 'upsertEntry',
+          path: 'endpoints.custom',
+          key: 'K',
+          identity: 'K',
+          baseline: shown,
+          value: lowerK,
+        },
+      ]);
     });
 
     it('says nothing when the layer below does not have the name', async () => {

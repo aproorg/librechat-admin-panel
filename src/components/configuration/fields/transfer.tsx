@@ -2,8 +2,7 @@ import { useContext } from 'react';
 import type { ReactNode } from 'react';
 import type * as t from '@/types';
 import {
-  entriesByKey,
-  getValueAtPath,
+  entryOf,
   isConfigRecord,
   findStoredSecrets,
   getKeyedCollection,
@@ -12,19 +11,14 @@ import {
 import {
   useEntryMarkers,
   useConfigFeatures,
+  useLocalize,
   useTransferOffer,
+  useEntryOverrideNotes,
   useRecordEntryOverrides,
 } from '@/hooks';
+import { describeOverrideNotes } from '../values';
 import { TransferDialog } from '@/components/configuration/transfer';
 import { ConfigValuesContext } from '@/contexts/ConfigValuesContext';
-
-/** The entry `key` of the record or by-name list at `path` in `root`, if that layer holds it. */
-function entryOf(root: t.ConfigValue, path: string, key: string): t.ConfigValue {
-  const at = getValueAtPath(root, path);
-  const collection = getKeyedCollection(path);
-  if (collection) return entriesByKey(at, collection.key).get(key);
-  return isConfigRecord(at) && Object.hasOwn(at, key) ? at[key] : undefined;
-}
 
 /**
  * Copy to… and Move to… for the entries of the record or by-name list at
@@ -41,6 +35,8 @@ export function useFieldTransfer(path: string | undefined): {
   const markersOf = useEntryMarkers(path);
   const overridesOf = useRecordEntryOverrides(path ?? '');
   const offer = useTransferOffer(path ?? '');
+  const localize = useLocalize();
+  const overrideNotes = useEntryOverrideNotes(path ?? '');
   const collection = path ? getKeyedCollection(path) : undefined;
 
   const offersAny =
@@ -62,6 +58,7 @@ export function useFieldTransfer(path: string | undefined): {
       fromFile: entryOf(layers.yamlEffective, path, key) !== undefined,
       own: entryOf(lowerLayer, path, key) === undefined || overridden === true,
       writable: !disabled,
+      notes: describeOverrideNotes(overrideNotes.left(key), localize),
     });
   };
 

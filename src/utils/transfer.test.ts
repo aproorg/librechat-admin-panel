@@ -851,3 +851,42 @@ describe('planCopy ops through the real write planner', () => {
     expect(ownList(got.storedAfter)).toEqual([{ name: 'K', baseURL: 'https://new' }]);
   });
 });
+
+describe('planRemoval of an override of an entry the layer below has, through the real write planner', () => {
+  const lowerK = { name: 'K', apiKey: 'user_provided', baseURL: 'https://low' };
+  const ownK = { name: 'K', baseURL: 'https://old', headers: { Stale: '1' } };
+  const entry: t.TransferEntry = {
+    path: 'endpoints.custom',
+    key: 'K',
+    value: mergeConfigLayers(lowerK, ownK),
+    secrets: [],
+    lower: lowerK,
+  };
+  const run = (ops: t.ConfigChange[]) =>
+    planConfigChanges(ops, {
+      stored: { endpoints: { custom: [ownK] } },
+      tombstones: [],
+      lower: { endpoints: { custom: [lowerK] } },
+      lowerKind: 'inherited',
+    });
+  const ownList = (after: t.ConfigRecord): t.ConfigValue[] =>
+    ((after.endpoints as t.ConfigRecord | undefined)?.custom ?? []) as t.ConfigValue[];
+
+  it('drops the override so the lower entry shows again, with no issue', () => {
+    const got = run(planRemoval(entry));
+    expect(got.issues).toEqual([]);
+    expect(ownList(got.storedAfter)).toEqual([]);
+    expect(mergeConfigLayers(lowerK, ownList(got.storedAfter)[0])).toEqual(lowerK);
+  });
+
+  it('still removes an own-only keyed entry by name', () => {
+    expect(planRemoval({ ...entry, lower: undefined })).toEqual([
+      { op: 'removeEntry', path: 'endpoints.custom', key: 'K', identity: 'K' },
+    ]);
+  });
+
+  it('still resets a record entry', () => {
+    const record: t.TransferEntry = { path: 'mcpServers', key: 'BC', value: {}, secrets: [] };
+    expect(planRemoval({ ...record, lower: {} })).toEqual([{ op: 'reset', path: 'mcpServers.BC' }]);
+  });
+});

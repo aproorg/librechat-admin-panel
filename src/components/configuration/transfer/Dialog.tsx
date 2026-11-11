@@ -15,11 +15,13 @@ import {
   scopeConfigOptions,
   useConfigFeatures,
   useConfigWriteRules,
+  isRetryable,
 } from '@/hooks';
 import {
   cn,
   planCopy,
   entriesByKey,
+  entryOf,
   isConfigRecord,
   mergeScopeLayer,
   getValueAtPath,
@@ -77,12 +79,6 @@ function namesAt(layer: t.ConfigValue, entry: t.TransferEntry): Set<string> {
   return new Set(isConfigRecord(list) ? Object.keys(list) : []);
 }
 
-function shownEntry(layer: t.ConfigValue, entry: t.TransferEntry): t.ConfigValue {
-  const collection = getKeyedCollection(entry.path);
-  if (!collection) return undefined;
-  return entriesByKey(getValueAtPath(layer, entry.path), collection.key).get(entry.key);
-}
-
 function namesOf(
   entry: t.TransferEntry,
   base: t.BaseConfigData,
@@ -93,18 +89,18 @@ function namesOf(
     return {
       ownKeys: namesAt(base.dbOverrides ?? {}, entry),
       shownKeys: namesAt(base.config, entry),
-      current: shownEntry(base.config, entry),
+      current: entryOf(base.config, entry.path, entry.key),
     };
   }
   const shown = merge(base.config, scope);
   return {
     ownKeys: namesAt(scope.overrides, entry),
     shownKeys: namesAt(shown, entry),
-    current: shownEntry(shown, entry),
+    current: entryOf(shown, entry.path, entry.key),
   };
 }
 
-/** The names each ticked target holds and shows, by key (none while its layers load or fail); `lowerShows` is whether Base also has the entry the open profile would give up. */
+/** The names each ticked target holds and shows, by key (none while its layers load or fail); `lowerShows` is whether Base also has the entry the open profile would give up, and `lower` that Base entry. */
 function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry, readsLower: boolean) {
   const rules = useConfigWriteRules();
   const { keyedTombstones } = useConfigFeatures();
@@ -123,9 +119,12 @@ function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry, readsLo
     if (target.type === 'scope' && !scope) return;
     names.set(keyOf(target), namesOf(entry, base.data, scope, merge));
   });
+  const lower =
+    readsLower && base.data ? entryOf(base.data.config, entry.path, entry.key) : undefined;
   const failedQueries = [base, ...scoped].filter((query) => query.isError);
   return {
     names,
+    lower,
     lowerShows: readsLower && !!base.data && namesAt(base.data.config, entry).has(entry.key),
     failed: chosen.length > 0 && failedQueries.length > 0,
     loading: chosen.some((target) => !names.has(keyOf(target))),
@@ -161,19 +160,7 @@ function ResultRow({ result, label: heading }: { result: t.TransferResult; label
   );
 }
 
-interface PickerProps {
-  mode: t.TransferMode;
-  entry: t.TransferEntry;
-  loading: boolean;
-  failed: boolean;
-  targets: t.WriteTarget[];
-  ticked: ReadonlySet<string>;
-  chosen: t.WriteTarget[];
-  onReload: () => void;
-  onToggle: (key: string, checked: boolean) => void;
-}
-
-function Picker(props: PickerProps) {
+function Picker(props: t.PickerProps) {
   const { mode, entry, loading, failed, targets, ticked, chosen, onReload, onToggle } = props;
   const localize = useLocalize();
   if (loading) return <PlacesSkeleton />;
@@ -234,19 +221,7 @@ function Picker(props: PickerProps) {
   );
 }
 
-interface OptionsProps {
-  entry: t.TransferEntry;
-  clashing: t.WriteTarget[];
-  choices: Readonly<Record<string, t.ClashChoice>>;
-  secrets: Readonly<Record<string, string>>;
-  loading: boolean;
-  failed: boolean;
-  onRetry: () => void;
-  onChoose: (key: string, choice: t.ClashChoice) => void;
-  onSecret: (path: string, value: string) => void;
-}
-
-function Options(props: OptionsProps) {
+function Options(props: t.OptionsProps) {
   const { entry, clashing, choices, secrets, loading, failed, onRetry, onChoose, onSecret } = props;
   const localize = useLocalize();
   return (
@@ -317,19 +292,7 @@ function useTicks(targets: t.WriteTarget[]) {
   return { ticked, chosen, toggle };
 }
 
-interface FooterProps {
-  error?: string;
-  started: boolean;
-  canRetry: boolean;
-  running: boolean;
-  canConfirm: boolean;
-  mode: t.TransferMode;
-  onClose: () => void;
-  onConfirm: () => void;
-  onRetry: () => void;
-}
-
-function Footer(props: FooterProps) {
+function Footer(props: t.FooterProps) {
   const localize = useLocalize();
   const { error, started, canRetry, running, canConfirm, mode, onClose, onConfirm, onRetry } =
     props;
@@ -373,7 +336,13 @@ function Footer(props: FooterProps) {
   );
 }
 
-function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogProps, 'open'>) {
+function TransferBody({
+  mode,
+  entry,
+  source,
+  notes,
+  onClose,
+}: Omit<t.TransferDialogProps, 'open'>) {
   const localize = useLocalize();
   const { hasCapability } = useCapabilities();
   const query = useQuery(availableScopesOptions);
@@ -386,7 +355,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
   const canWrite = hasConfigCapability(hasCapability, null, 'manage');
   const targets = transferTargets(canWrite ? scopes : EMPTY_SCOPES, source, canWrite);
   const { ticked, chosen, toggle } = useTicks(targets);
-  const { names, lowerShows, loading, failed, retry } = useTargetNames(
+  const { names, lower, lowerShows, loading, failed, retry } = useTargetNames(
     chosen,
     entry,
     mode === 'move' && source.type === 'scope',
@@ -396,9 +365,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
   const secretsTyped = entry.secrets.every((path) => (secrets[path] ?? '') !== '');
   const started = transfer.results.length > 0;
   const { removal } = transfer;
-  const retryable = (result: t.TransferResult | null) =>
-    result?.status === 'failed' || result?.status === 'stale';
-  const canRetry = transfer.results.some(retryable) || retryable(removal);
+  const canRetry = transfer.results.some(isRetryable) || isRetryable(removal);
   const canConfirm =
     chosen.length > 0 && !loading && secretsTyped && clashing.every((target) => choiceOf(target));
 
@@ -418,7 +385,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
         .map((wanted) => planCopy(entry, wanted, secrets))
         .filter((step): step is t.TransferStep => step !== null);
       if (steps.length === 0) return onClose();
-      await transfer.run(mode, entry, steps);
+      await transfer.run(mode, lowerShows ? { ...entry, lower } : entry, steps);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -476,6 +443,18 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
             )}
           </>
         )}
+        {mode === 'move' && !started && notes && notes.length > 0 && (
+          <ul
+            data-testid="transfer-notes"
+            className="m-0 flex list-disc flex-col gap-1 pl-4 text-sm"
+          >
+            {notes.map((note) => (
+              <li key={note} className="wrap-anywhere">
+                {note}
+              </li>
+            ))}
+          </ul>
+        )}
         {lowerShows && !transfer.originalKept && (
           <p data-testid="transfer-lower" className="m-0 text-sm wrap-anywhere">
             {localize('com_config_transfer_lower_shows', { name: entry.key })}
@@ -499,7 +478,14 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
 }
 
 /** Copy (or move) one entry to the places the admin ticks; nothing is written until confirm. */
-export function TransferDialog({ open, mode, entry, source, onClose }: t.TransferDialogProps) {
+export function TransferDialog({
+  open,
+  mode,
+  entry,
+  source,
+  notes,
+  onClose,
+}: t.TransferDialogProps) {
   const localize = useLocalize();
   const returnFocus = useReturnFocus(open);
   return (
@@ -516,7 +502,7 @@ export function TransferDialog({ open, mode, entry, source, onClose }: t.Transfe
         onCloseAutoFocus={returnFocus}
         className="modal-frost form-dialog-content"
       >
-        <TransferBody mode={mode} entry={entry} source={source} onClose={onClose} />
+        <TransferBody mode={mode} entry={entry} source={source} notes={notes} onClose={onClose} />
       </Dialog.Content>
     </Dialog>
   );

@@ -9,11 +9,8 @@ import { useLocalize } from '../useLocalize';
 const EMPTY_RECORD: t.ConfigRecord = Object.freeze({}) as t.ConfigRecord;
 
 /**
- * Copy to… and Move to… for the entries of the collection at `path`: `itemsFor`
- * gives one entry's items (none where the list is not merged entry by entry)
- * from the facts only its surface knows, `dialog` is what to give
- * `<TransferDialog>`. Move shows the surface's extra reason, else why it is
- * blocked, else the unsaved hint; Copy the extra reason, else the hint.
+ * Copy to… and Move to… for the entries of the collection at `path`.
+ * `itemsFor` turns the facts a surface alone knows into one entry's items, and `dialog` is what to give `<TransferDialog>`.
  */
 export function useTransferOffer(path: string): t.TransferOffer {
   const localize = useLocalize();
@@ -24,7 +21,7 @@ export function useTransferOffer(path: string): t.TransferOffer {
     valuesData?.isDirty === true ? localize('com_config_transfer_unsaved') : undefined;
 
   const itemsFor = (facts: t.TransferFacts): t.TransferAction[] => {
-    const { key, value, secrets, extraReason } = facts;
+    const { key, value, secrets, extraReason, notes } = facts;
     const eligibility = transferEligibility(path, facts);
     if (!eligibility.copy) return [];
     const blocked =
@@ -32,7 +29,7 @@ export function useTransferOffer(path: string): t.TransferOffer {
     const item = (mode: t.TransferMode, reason: string | undefined): t.TransferAction => ({
       mode,
       label: localize(`com_config_transfer_title_${mode}`),
-      onSelect: () => setChosen({ key, mode, value, secrets }),
+      onSelect: () => setChosen({ key, mode, value, secrets, notes }),
       disabled: reason !== undefined,
       reason,
     });
@@ -48,6 +45,7 @@ export function useTransferOffer(path: string): t.TransferOffer {
       value: chosen?.value ?? EMPTY_RECORD,
       secrets: chosen?.secrets ?? [],
     },
+    notes: chosen?.notes,
     source:
       editingScope && valuesData?.layers?.scope != null
         ? { type: 'scope', scope: editingScope }

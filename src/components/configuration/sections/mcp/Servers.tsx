@@ -603,6 +603,7 @@ export function McpServersRenderer({
         fromFile: isYaml,
         own: !isLower || overrides > 0,
         writable: !disabled,
+        notes: describeOverrideNotes(overrideNotes.left(key), localize),
         extraReason: isStdio ? localize('com_config_mcp_transport_stdio_desc') : undefined,
       })
       .map((item): t.McpServerAction => ({

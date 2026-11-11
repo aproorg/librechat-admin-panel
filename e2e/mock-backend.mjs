@@ -318,8 +318,8 @@ const admin =
     authFailure(args[1]) ?? handler(...args);
 
 // ── Configuration documents ───────────────────────────────────────────
-// Base's admin override document and one profile, with the one MCP server Base
-// carries. `PATCH …/fields` stores into them, so a copy sticks until restart.
+// Base's admin override document and one profile, with the two MCP servers Base
+// carries (`docs`, and `filed` from the yaml layer). `PATCH …/fields` stores into them, so a copy sticks until restart.
 
 const BASE_CONFIG_ID = '__base__';
 const configDoc = (principalType, principalId, overrides) => ({

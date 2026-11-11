@@ -9,6 +9,8 @@ export interface TransferEntry {
   key: string;
   value: ConfigValue;
   secrets: string[];
+  /** The entry the layer below shows under this name, when the open layer holds an override of it: removing the override restores it. */
+  lower?: ConfigValue;
 }
 export type ClashChoice = 'replace' | 'keepBoth' | 'skip';
 /** `ownKeys`: names the target's own layer holds (a clash). `shownKeys`: every name the target shows, own or inherited (a keep-both name must miss all of them). */
@@ -53,6 +55,7 @@ export interface ChosenEntry {
   mode: TransferMode;
   value: ConfigValue;
   secrets: string[];
+  notes?: string[];
 }
 /** What a surface alone knows about one entry; `extraReason` disables both actions ahead of every other reason. */
 export interface TransferFacts {
@@ -63,15 +66,72 @@ export interface TransferFacts {
   own: boolean;
   writable: boolean;
   extraReason?: string;
+  /** What deleting the entry warns about (other profiles that override it by name), shown before a move confirms. */
+  notes?: string[];
 }
 export interface TransferDialogProps {
   open: boolean;
   mode: TransferMode;
   entry: TransferEntry;
   source: WriteTarget;
+  notes?: string[];
   onClose: () => void;
 }
 export interface TransferOffer {
   itemsFor: (facts: TransferFacts) => TransferAction[];
   dialog: TransferDialogProps;
+}
+
+export interface EntryTransferState {
+  run(mode: TransferMode, entry: TransferEntry, steps: TransferStep[]): Promise<void>;
+  retry(): Promise<void>;
+  results: TransferResult[];
+  /** The removal of the original after a move: null until every copy is saved. */
+  removal: TransferResult | null;
+  running: boolean;
+  originalKept: boolean;
+}
+export interface Transfer {
+  mode: TransferMode;
+  entry: TransferEntry;
+  steps: TransferStep[];
+  results: TransferResult[];
+  removal: TransferResult | null;
+}
+export interface Publish {
+  results(results: TransferResult[]): void;
+  removal(removal: TransferResult): void;
+}
+export interface PickerProps {
+  mode: TransferMode;
+  entry: TransferEntry;
+  loading: boolean;
+  failed: boolean;
+  targets: WriteTarget[];
+  ticked: ReadonlySet<string>;
+  chosen: WriteTarget[];
+  onReload: () => void;
+  onToggle: (key: string, checked: boolean) => void;
+}
+export interface OptionsProps {
+  entry: TransferEntry;
+  clashing: WriteTarget[];
+  choices: Readonly<Record<string, ClashChoice>>;
+  secrets: Readonly<Record<string, string>>;
+  loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
+  onChoose: (key: string, choice: ClashChoice) => void;
+  onSecret: (path: string, value: string) => void;
+}
+export interface FooterProps {
+  error?: string;
+  started: boolean;
+  canRetry: boolean;
+  running: boolean;
+  canConfirm: boolean;
+  mode: TransferMode;
+  onClose: () => void;
+  onConfirm: () => void;
+  onRetry: () => void;
 }

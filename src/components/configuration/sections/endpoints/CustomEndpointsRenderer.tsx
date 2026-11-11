@@ -553,6 +553,7 @@ export function CustomEndpointsRenderer(props: t.FieldRendererProps) {
         fromFile: fileNames.has(entryIdentityOf(collection, row.loadedName)),
         own: row.origin !== 'inherited' || row.overridden,
         writable: !disabled,
+        notes: describeOverrideNotes(overrideNotes.left(row.loadedName), localize),
       })
       .map((item): t.KebabMenuItem => ({
         label: item.label,

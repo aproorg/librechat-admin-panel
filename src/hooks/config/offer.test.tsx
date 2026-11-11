@@ -174,6 +174,14 @@ describe('useTransferOffer', () => {
       expect(view.result.current.dialog.source).toEqual({ type: 'base' });
     });
 
+    it('hands the notes of the chosen entry to the dialog, and none before one is chosen', () => {
+      const notes = ['Team a overrides docs by name'];
+      const view = setup();
+      expect(view.result.current.dialog.notes).toBeUndefined();
+      act(() => itemFor(view.result.current.itemsFor({ ...own, notes }), 'move')?.onSelect());
+      expect(view.result.current.dialog.notes).toEqual(notes);
+    });
+
     it('closing clears the entry again', () => {
       const view = setup();
       act(() => itemFor(view.result.current.itemsFor(own), 'copy')?.onSelect());

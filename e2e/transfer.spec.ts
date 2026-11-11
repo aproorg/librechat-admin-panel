@@ -7,7 +7,10 @@ import { LIVE, MOCK_BACKEND_URL, MOCK_ADMIN_HEADERS, MOCK_FIXTURES_SKIP_REASON }
  * one admin server (`docs`) and one librechat.yaml server (`filed`), and an
  * Engineering group profile; a live LibreChat has neither. Each test that
  * writes works on a server of its own and removes it again, so the spec runs
- * in any order, in parallel, and again against the same backend.
+ * in any order, in parallel, and again against the same backend. It also pins
+ * the cases where an action is disabled with its reason: unsaved edits, a
+ * server librechat.yaml defines, one the open profile only inherits, and a
+ * place the admin may not write.
  */
 const SERVER = 'docs';
 const FILE_SERVER = 'filed';

@@ -389,6 +389,31 @@ describe('useEntryTransfer', () => {
       expect(result.current.removal).toMatchObject({ status: 'saved', key: 'Notes' });
     });
 
+    it('removes a profile override of an entry the layer below has by writing the lower entry back', async () => {
+      applyMock.mockResolvedValue(ok());
+      const lower = { name: 'K', baseURL: 'https://low' };
+      const shown = { name: 'K', baseURL: 'https://own' };
+      const keyed: t.TransferEntry = {
+        path: 'endpoints.custom',
+        key: 'K',
+        value: shown,
+        secrets: [],
+        lower,
+      };
+      const { result } = setup({ source: toRole });
+      await act(() => result.current.run('move', keyed, [stepFor(toGroup)]));
+      expect(saveCalls()[1].ops).toEqual([
+        {
+          op: 'upsertEntry',
+          path: 'endpoints.custom',
+          key: 'K',
+          identity: 'K',
+          baseline: shown,
+          value: lower,
+        },
+      ]);
+    });
+
     it('removes from a profile source, not from base', async () => {
       applyMock.mockResolvedValue(ok());
       const { result } = setup({ source: toRole });

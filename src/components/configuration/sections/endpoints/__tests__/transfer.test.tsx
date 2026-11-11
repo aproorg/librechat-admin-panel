@@ -118,10 +118,12 @@ function Harness({
   layers,
   isDirty,
   disabled,
+  profiles = [],
 }: {
   layers: t.ValueLayers;
   isDirty?: boolean;
   disabled?: boolean;
+  profiles?: t.ConfigScope[];
 }) {
   const items = listOf(layers);
   const editingScope = layers.scope ? PROFILE : undefined;
@@ -130,7 +132,11 @@ function Harness({
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
       <ScopeActionsContext.Provider
-        value={{ selectScope: vi.fn(), editingScope, index: { scopes: [], byPath: new Map() } }}
+        value={{
+          selectScope: vi.fn(),
+          editingScope,
+          index: { scopes: profiles, byPath: new Map() },
+        }}
       >
         <ConfigValuesProvider value={{ ...valuesDataFixture(layers), isDirty }}>
           <CustomEndpointsRenderer
@@ -259,6 +265,27 @@ describe('Copy to… and Move to… on a custom endpoint row', () => {
     openMenu('Plain');
     expect(item('Move to…')).not.toHaveAttribute('aria-disabled');
     expect(screen.queryByText(BLOCKED.inherited)).toBeNull();
+  });
+
+  it('shows what a profile overriding the endpoint by name loses when Move is chosen, and not for Copy', async () => {
+    const overrider: t.ConfigScope = {
+      ...PROFILE,
+      principalId: 'g1',
+      name: 'Team g1',
+      overridePaths: ['endpoints.custom'],
+      overrideEntries: { 'endpoints.custom': ['Plain'] },
+    };
+    const { unmount } = render(<Harness layers={baseLayers()} profiles={[overrider]} />);
+    openMenu('Plain');
+    fireEvent.click(item('Move to…') as HTMLElement);
+    const dialog = await screen.findByRole('dialog', { name: 'Move to…' });
+    expect(within(dialog).getByTestId('transfer-notes')).toHaveTextContent(/Team g1/);
+    unmount();
+    render(<Harness layers={baseLayers()} profiles={[overrider]} />);
+    openMenu('Plain');
+    fireEvent.click(item('Copy to…') as HTMLElement);
+    await screen.findByRole('dialog', { name: 'Copy to…' });
+    expect(screen.queryByTestId('transfer-notes')).toBeNull();
   });
 
   it('gives the block reason, not the unsaved hint, for Move on a file endpoint of a dirty page', () => {

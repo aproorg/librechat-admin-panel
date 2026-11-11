@@ -13,7 +13,10 @@ function toTargetRef(target: t.WriteTarget): t.WriteTargetRef {
   return { type: 'scope', scope: { principalType, principalId } };
 }
 
-const RETRYABLE: ReadonlySet<t.TransferStatus> = new Set(['failed', 'stale']);
+/** Whether a save may be run again: it failed or went stale. */
+export function isRetryable(result: t.TransferResult | null | undefined): boolean {
+  return result?.status === 'failed' || result?.status === 'stale';
+}
 
 function readKeys(target: t.WriteTarget): ReadonlyArray<readonly string[]> {
   return target.type === 'base'
@@ -92,37 +95,14 @@ function copiesComplete(results: t.TransferResult[]): boolean {
   return attempted.length > 0 && attempted.every(({ status }) => status === 'saved');
 }
 
-interface EntryTransferState {
-  run(mode: t.TransferMode, entry: t.TransferEntry, steps: t.TransferStep[]): Promise<void>;
-  retry(): Promise<void>;
-  results: t.TransferResult[];
-  /** The removal of the original after a move: null until every copy is saved. */
-  removal: t.TransferResult | null;
-  running: boolean;
-  originalKept: boolean;
-}
-
-interface Transfer {
-  mode: t.TransferMode;
-  entry: t.TransferEntry;
-  steps: t.TransferStep[];
-  results: t.TransferResult[];
-  removal: t.TransferResult | null;
-}
-
-interface Publish {
-  results(results: t.TransferResult[]): void;
-  removal(removal: t.TransferResult): void;
-}
-
 /** Saves `steps`, then for a move the removal once every copy is saved; `fresh` reads each target's revision anew. Returns the targets written to. */
 async function writeTransfer(
   client: QueryClient,
   source: t.WriteTarget,
-  transfer: Transfer,
+  transfer: t.Transfer,
   steps: t.TransferStep[],
   fresh: boolean,
-  publish: Publish,
+  publish: t.Publish,
 ): Promise<t.WriteTarget[]> {
   for (const step of steps) {
     const { target, key, ops } = step;
@@ -147,21 +127,21 @@ async function writeTransfer(
  * target as it is now. A move removes the original from `source` once every
  * copy is saved, and never before.
  */
-export function useEntryTransfer(options: { source: t.WriteTarget }): EntryTransferState {
+export function useEntryTransfer(options: { source: t.WriteTarget }): t.EntryTransferState {
   const { source } = options;
   const queryClient = useQueryClient();
   const [results, setResults] = useState<t.TransferResult[]>([]);
   const [removal, setRemoval] = useState<t.TransferResult | null>(null);
   const [running, setRunning] = useState(false);
   const [mode, setMode] = useState<t.TransferMode>('copy');
-  const transferRef = useRef<Transfer | null>(null);
+  const transferRef = useRef<t.Transfer | null>(null);
   const busyRef = useRef(false);
 
   const execute = useCallback(
-    async (transfer: Transfer, steps: t.TransferStep[], fresh: boolean) => {
+    async (transfer: t.Transfer, steps: t.TransferStep[], fresh: boolean) => {
       busyRef.current = true;
       setRunning(true);
-      const publish: Publish = { results: setResults, removal: setRemoval };
+      const publish: t.Publish = { results: setResults, removal: setRemoval };
       let touched: t.WriteTarget[] = steps.map(({ target }) => target);
       try {
         touched = await writeTransfer(queryClient, source, transfer, steps, fresh, publish);
@@ -176,12 +156,18 @@ export function useEntryTransfer(options: { source: t.WriteTarget }): EntryTrans
     [queryClient, source],
   );
 
-  const run = useCallback<EntryTransferState['run']>(
+  const run = useCallback<t.EntryTransferState['run']>(
     async (nextMode, entry, steps) => {
       if (busyRef.current) return;
       busyRef.current = true;
       const pending = steps.map(toPending);
-      const transfer: Transfer = { mode: nextMode, entry, steps, results: pending, removal: null };
+      const transfer: t.Transfer = {
+        mode: nextMode,
+        entry,
+        steps,
+        results: pending,
+        removal: null,
+      };
       transferRef.current = transfer;
       setMode(nextMode);
       setRemoval(null);
@@ -194,7 +180,7 @@ export function useEntryTransfer(options: { source: t.WriteTarget }): EntryTrans
   const retry = useCallback(async () => {
     const transfer = transferRef.current;
     if (busyRef.current || !transfer) return;
-    const failed = transfer.steps.filter((_, i) => RETRYABLE.has(transfer.results[i]?.status));
+    const failed = transfer.steps.filter((_, i) => isRetryable(transfer.results[i]));
     const removalFailed = transfer.removal !== null && transfer.removal.status !== 'saved';
     if (failed.length === 0 && !removalFailed) return;
     await execute(transfer, failed, true);
