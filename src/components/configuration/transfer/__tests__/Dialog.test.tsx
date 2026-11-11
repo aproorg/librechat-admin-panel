@@ -7,10 +7,20 @@ import type * as t from '@/types';
 import { applyConfigChangesFn } from '@/server';
 import { TransferDialog } from '../Dialog';
 
-const scopes = vi.hoisted(() => ({ list: [] as unknown[], pending: false, fail: false, canManage: true }));
+const scopes = vi.hoisted(() => ({
+  list: [] as unknown[],
+  pending: false,
+  fail: false,
+  canManage: true,
+}));
 
 vi.mock('@/server', () => ({
   applyConfigChangesFn: vi.fn(),
+  baseConfigOptions: {
+    queryKey: ['baseConfig'],
+    queryFn: () => Promise.resolve({ dbRevision: 'base-rev' }),
+  },
+  getResolvedConfigFn: () => Promise.resolve({ revision: 'scope-rev' }),
   availableScopesOptions: {
     queryKey: ['availableScopes'],
     queryFn: () => {

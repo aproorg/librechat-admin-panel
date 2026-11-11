@@ -2,9 +2,10 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback, useRef } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
 import type * as t from '@/types';
-import { applyConfigChangesFn, getBaseConfigFn, getResolvedConfigFn } from '@/server';
+import { applyConfigChangesFn, baseConfigOptions } from '@/server';
 import { planRemoval, toRevisionPrecondition } from '@/utils';
 import { RESOLVED_READ_QUERY_KEYS } from '@/constants';
+import { scopeConfigOptions } from './layers';
 
 function toTargetRef(target: t.WriteTarget): t.WriteTargetRef {
   if (target.type === 'base') return { type: 'base' };
@@ -28,19 +29,10 @@ async function readRevision(
 ): Promise<string | undefined> {
   const staleTime = fresh ? 0 : Infinity;
   if (target.type === 'base') {
-    const base = await client.fetchQuery({
-      queryKey: ['baseConfig'],
-      queryFn: () => getBaseConfigFn(),
-      staleTime,
-    });
+    const base = await client.fetchQuery({ ...baseConfigOptions, staleTime });
     return toRevisionPrecondition(base.dbRevision);
   }
-  const { principalType, principalId } = target.scope;
-  const doc = await client.fetchQuery({
-    queryKey: ['resolvedConfig', principalType, principalId],
-    queryFn: () => getResolvedConfigFn({ data: { principalType, principalId } }),
-    staleTime,
-  });
+  const doc = await client.fetchQuery({ ...scopeConfigOptions(target.scope), staleTime });
   return toRevisionPrecondition(doc.revision);
 }
 
@@ -53,8 +45,9 @@ function toResult(
   if (outcome.conflict) return { target, key, status: 'stale' };
   const [problem] = [...outcome.issues, ...outcome.failed];
   if (problem) return { target, key, status: 'failed', message: problem.message };
-  if (outcome.applied === 0) {
-    return { target, key, status: 'failed', message: outcome.skipped[0]?.reason };
+  const [dropped] = [...outcome.skipped, ...outcome.reported];
+  if (outcome.applied === 0 || dropped) {
+    return { target, key, status: 'failed', message: dropped?.reason };
   }
   return { target, key, status: 'saved' };
 }

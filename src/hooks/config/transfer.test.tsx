@@ -4,17 +4,17 @@ import { PrincipalType } from 'librechat-data-provider';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type * as t from '@/types';
-import { applyConfigChangesFn, getBaseConfigFn, getResolvedConfigFn } from '@/server';
+import { applyConfigChangesFn, baseConfigOptions, getResolvedConfigFn } from '@/server';
 import { useEntryTransfer } from './transfer';
 
 vi.mock('@/server', () => ({
   applyConfigChangesFn: vi.fn(),
-  getBaseConfigFn: vi.fn(),
+  baseConfigOptions: { queryKey: ['baseConfig'], queryFn: vi.fn() },
   getResolvedConfigFn: vi.fn(),
 }));
 
 const applyMock = vi.mocked(applyConfigChangesFn);
-const baseMock = vi.mocked(getBaseConfigFn);
+const baseMock = vi.mocked(baseConfigOptions.queryFn as () => Promise<t.BaseConfigData>);
 const resolvedMock = vi.mocked(getResolvedConfigFn);
 const baseDoc = (dbRevision: string | null) => ({ dbRevision }) as t.BaseConfigData;
 const scopeDoc = (revision: string | null | undefined): t.ResolvedConfigData => ({
@@ -597,6 +597,106 @@ describe('useEntryTransfer', () => {
       const { result, invalidate } = setup();
       await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
       expect(invalidatedKeys(invalidate)).toContain('baseConfig');
+    });
+
+    it('treats a copy that wrote but dropped part of it as failed, with the reason', async () => {
+      applyMock.mockResolvedValue({
+        ...ok(),
+        applied: 3,
+        skipped: [{ fieldPath: 'mcpServers.Notes.apiKey', reason: 'notStored' }],
+      });
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(result.current.results[0]).toMatchObject({
+        status: 'failed',
+        message: 'notStored',
+      });
+    });
+
+    it('treats a copy with a reported part as failed, with the reason', async () => {
+      applyMock.mockResolvedValue({
+        ...ok(),
+        applied: 3,
+        reported: [{ fieldPath: 'mcpServers.Notes.apiKey', reason: 'notApplied' }],
+      });
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(result.current.results[0]).toMatchObject({ status: 'failed', message: 'notApplied' });
+    });
+
+    it('does not remove the original after a copy that dropped part of it', async () => {
+      applyMock.mockResolvedValue({
+        ...ok(),
+        applied: 3,
+        skipped: [{ fieldPath: 'mcpServers.Notes.apiKey', reason: 'notStored' }],
+      });
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(applyMock).toHaveBeenCalledTimes(1);
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('does not remove the original after a copy with a reported part', async () => {
+      applyMock.mockResolvedValue({
+        ...ok(),
+        applied: 3,
+        reported: [{ fieldPath: 'mcpServers.Notes.apiKey', reason: 'notApplied' }],
+      });
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(applyMock).toHaveBeenCalledTimes(1);
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('ignores retry while a copy save is in flight', async () => {
+      let release: (value: t.ApplyConfigChangesResult) => void = () => undefined;
+      applyMock.mockRejectedValueOnce(new Error('boom'));
+      applyMock.mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      let first: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = result.current.run('copy', entry, [stepFor(toGroup), stepFor(toRole)]);
+        await vi.waitFor(() => expect(applyMock).toHaveBeenCalledTimes(2));
+        await result.current.retry();
+      });
+      expect(applyMock).toHaveBeenCalledTimes(2);
+      await act(async () => {
+        release(ok());
+        await first;
+      });
+      expect(applyMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not say the original was kept while the removal is still saving', async () => {
+      let release: (value: t.ApplyConfigChangesResult) => void = () => undefined;
+      applyMock.mockResolvedValueOnce(ok());
+      applyMock.mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+      const { result } = setup();
+      let first: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = result.current.run('move', entry, [stepFor(toGroup)]);
+        await vi.waitFor(() => expect(applyMock).toHaveBeenCalledTimes(2));
+      });
+      expect(result.current.running).toBe(true);
+      expect(result.current.originalKept).toBe(false);
+      await act(async () => {
+        release(ok());
+        await first;
+      });
+    });
+
+    it('clears the previous move when a new one starts', async () => {
+      applyMock
+        .mockResolvedValueOnce(ok())
+        .mockResolvedValueOnce(ok())
+        .mockRejectedValueOnce(new Error('boom'));
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(result.current.removal?.status).toBe('saved');
+      await act(() => result.current.run('move', entry, [stepFor(toRole)]));
+      expect(result.current.removal).toBeNull();
+      expect(result.current.originalKept).toBe(true);
     });
   });
 });
