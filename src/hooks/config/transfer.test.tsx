@@ -187,4 +187,73 @@ describe('useEntryTransfer', () => {
     await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
     expect(result.current.running).toBe(false);
   });
+
+  it('fails a save that wrote nothing, with the first skipped reason', async () => {
+    applyMock.mockResolvedValue({
+      ...ok(),
+      applied: 0,
+      skipped: [{ fieldPath: 'mcpServers.Notes', reason: 'permission' }],
+    });
+    const { result } = setup();
+    await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+    expect(result.current.results[0]).toMatchObject({ status: 'failed', message: 'permission' });
+  });
+
+  it('fails a save that wrote nothing and skipped nothing, without a message', async () => {
+    applyMock.mockResolvedValue({ ...ok(), applied: 0 });
+    const { result } = setup();
+    await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+    expect(result.current.results[0].status).toBe('failed');
+    expect(result.current.results[0].message).toBeUndefined();
+  });
+
+  it('ignores run and retry while a run is in flight', async () => {
+    let release: (value: t.ApplyConfigChangesResult) => void = () => undefined;
+    applyMock.mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+    applyMock.mockResolvedValue(ok());
+    const { result } = setup();
+    const steps = [stepFor(toGroup), stepFor(toRole)];
+    let first: Promise<void> = Promise.resolve();
+    await act(async () => {
+      first = result.current.run('copy', entry, steps);
+      await result.current.run('copy', entry, steps);
+      await result.current.retry();
+    });
+    expect(applyMock).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      release(ok());
+      await first;
+    });
+    expect(applyMock).toHaveBeenCalledTimes(2);
+    expect(result.current.results.map((r) => r.status)).toEqual(['saved', 'saved']);
+    expect(result.current.running).toBe(false);
+  });
+
+  it('keys each result by its own step', async () => {
+    applyMock.mockResolvedValue(ok());
+    const { result } = setup();
+    const other: t.TransferStep = { ...stepFor(toRole), key: 'Wiki' };
+    await act(() => result.current.run('copy', entry, [stepFor(toGroup), other]));
+    expect(result.current.results.map((r) => r.key)).toEqual(['Notes', 'Wiki']);
+  });
+
+  it('does not flag originalKept for a copy with a failed target', async () => {
+    applyMock.mockRejectedValueOnce(new Error('boom'));
+    const { result } = setup();
+    await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+    expect(result.current.results[0].status).toBe('failed');
+    expect(result.current.originalKept).toBe(false);
+  });
+
+  it('retries a stale step', async () => {
+    applyMock
+      .mockResolvedValueOnce({ ...ok(), applied: 0, conflict: true })
+      .mockResolvedValueOnce(ok());
+    const { result } = setup();
+    await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+    expect(result.current.results[0].status).toBe('stale');
+    await act(() => result.current.retry());
+    expect(applyMock).toHaveBeenCalledTimes(2);
+    expect(result.current.results[0].status).toBe('saved');
+  });
 });

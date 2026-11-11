@@ -23,8 +23,15 @@ function toResult(step: t.TransferStep, outcome: t.ApplyConfigChangesResult): t.
   const { target, key } = step;
   if (outcome.conflict) return { target, key, status: 'stale' };
   const [problem] = [...outcome.issues, ...outcome.failed];
-  if (!problem) return { target, key, status: 'saved' };
-  return { target, key, status: 'failed', message: problem.message };
+  if (problem) return { target, key, status: 'failed', message: problem.message };
+  if (outcome.applied === 0) {
+    return { target, key, status: 'failed', message: outcome.skipped[0]?.reason };
+  }
+  return { target, key, status: 'saved' };
+}
+
+function toPending({ target, key }: t.TransferStep): t.TransferResult {
+  return { target, key, status: 'pending' };
 }
 
 function toThrownResult(step: t.TransferStep, err: unknown): t.TransferResult {
@@ -74,6 +81,8 @@ export function useEntryTransfer(_options: { source: t.WriteTarget }): EntryTran
   const [running, setRunning] = useState(false);
   const [mode, setMode] = useState<t.TransferMode>('copy');
   const stepsRef = useRef<t.TransferStep[]>([]);
+  const resultsRef = useRef<t.TransferResult[]>([]);
+  const busyRef = useRef(false);
 
   const refresh = useCallback(
     (steps: t.TransferStep[]) => {
@@ -86,16 +95,19 @@ export function useEntryTransfer(_options: { source: t.WriteTarget }): EntryTran
 
   const runSteps = useCallback(
     async (steps: t.TransferStep[], previous: t.TransferResult[]) => {
+      busyRef.current = true;
       setRunning(true);
       try {
         const next = [...previous];
         for (const step of steps) {
           const index = stepsRef.current.indexOf(step);
           next[index] = await saveStep(step);
-          setResults([...next]);
+          resultsRef.current = [...next];
+          setResults(resultsRef.current);
         }
         await refresh(steps);
       } finally {
+        busyRef.current = false;
         setRunning(false);
       }
     },
@@ -104,13 +116,12 @@ export function useEntryTransfer(_options: { source: t.WriteTarget }): EntryTran
 
   const run = useCallback<EntryTransferState['run']>(
     async (nextMode, _entry, steps) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
       stepsRef.current = steps;
       setMode(nextMode);
-      const pending = steps.map(({ target, key }): t.TransferResult => ({
-        target,
-        key,
-        status: 'pending',
-      }));
+      const pending = steps.map(toPending);
+      resultsRef.current = pending;
       setResults(pending);
       await runSteps(steps, pending);
     },
@@ -118,10 +129,11 @@ export function useEntryTransfer(_options: { source: t.WriteTarget }): EntryTran
   );
 
   const retry = useCallback(async () => {
-    const failed = stepsRef.current.filter((_, i) => RETRYABLE.has(results[i]?.status));
+    if (busyRef.current) return;
+    const failed = stepsRef.current.filter((_, i) => RETRYABLE.has(resultsRef.current[i]?.status));
     if (failed.length === 0) return;
-    await runSteps(failed, results);
-  }, [results, runSteps]);
+    await runSteps(failed, resultsRef.current);
+  }, [runSteps]);
 
   return { run, retry, results, running, originalKept: keepsOriginal(mode, results) };
 }
