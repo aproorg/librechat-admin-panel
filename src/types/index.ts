@@ -26,5 +26,6 @@ export type * from './specs';
 export type * from './shell';
 export type * from './system';
 export type * from './theme';
+export type * from './transfer';
 export type * from './user';
 export type * from './values';
