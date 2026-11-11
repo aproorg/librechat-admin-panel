@@ -1,7 +1,7 @@
 import { configSchema } from 'librechat-data-provider';
 import type * as t from '@/types';
 import { schemaType, unwrapSchema, resolveSubSchema } from './schema';
-import { flattenObject, isConfigRecord, removeValueAtPath } from './format';
+import { flattenObject, isConfigRecord, removeValueAtPath, setValueAtPath } from './format';
 import { getKeyedCollection } from './collections';
 import { isSameScope } from './scopes';
 import { MASKED_SECRET } from './secrets';
@@ -57,45 +57,94 @@ function isWritableLeaf(leaf: t.ConfigValue): boolean {
 
 function withoutMask(record: t.ConfigRecord): t.ConfigRecord {
   return Object.fromEntries(
-    Object.entries(record)
-      .filter(([, leaf]) => leaf !== MASKED_SECRET)
-      .map(([key, leaf]): [string, t.ConfigValue] => [
-        key,
-        isConfigRecord(leaf) ? withoutMask(leaf) : leaf,
-      ]),
+    Object.entries(record).flatMap(([key, leaf]): [string, t.ConfigValue][] =>
+      leaf === MASKED_SECRET ? [] : [[key, unmasked(leaf)]],
+    ),
   );
 }
 
-/** The writes that put `entry` in one target, as today's create flow emits them. */
+function unmasked(value: t.ConfigValue): t.ConfigValue {
+  if (Array.isArray(value)) {
+    return value.filter((item) => item !== MASKED_SECRET).map(unmasked);
+  }
+  return isConfigRecord(value) ? withoutMask(value) : value;
+}
+
+function previewPath(secret: string): string {
+  return secret.replace(/[^.]+$/, '$&Preview');
+}
+
+function typedSecret(secret: string, secrets: Record<string, string>): string {
+  const typed = secrets[secret];
+  if (!typed || typed === MASKED_SECRET) {
+    throw new Error(`${secret}: the secret needs a typed value`);
+  }
+  return typed;
+}
+
+/** `name-copy`, then `name-copy-2`, ...: the first no shown entry has, in any letter case. The name itself stays as it is (spaces, dots, Icelandic letters). */
+function keepBothName(name: string, shown: ReadonlySet<string>): string {
+  const taken = new Set([...shown].map((key) => key.toLowerCase()));
+  const base = `${name}-copy`;
+  const free = (candidate: string) => !taken.has(candidate.toLowerCase());
+  if (free(base)) return base;
+  let n = 2;
+  while (!free(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+function assertAddressable(path: string, key: string): void {
+  if (key.includes('.')) throw new Error(`${path}: "${key}" has a dot, no path can address it`);
+}
+
+/** The writes that take `entry` out of the place it is in, as deleting it there emits them. */
+export function planRemoval(entry: t.TransferEntry): t.ConfigChange[] {
+  const collection = getKeyedCollection(entry.path);
+  if (collection) {
+    return [{ op: 'removeEntry', path: collection.path, key: entry.key, identity: entry.key }];
+  }
+  assertAddressable(entry.path, entry.key);
+  return [{ op: 'reset', path: `${entry.path}.${entry.key}` }];
+}
+
+/** The writes that put `entry` in one target, as today's create flow emits them. `secrets` holds the typed value of each of `entry.secrets`, by leaf path. */
 export function planCopy(
   entry: t.TransferEntry,
   input: t.TransferTargetInput,
-  _secrets: Record<string, string>,
+  secrets: Record<string, string>,
 ): t.TransferStep | null {
+  if (input.clash === 'skip') return null;
   const collection = getKeyedCollection(entry.path);
-  const hidden = collection?.secret ? [...entry.secrets, collection.secret.preview] : entry.secrets;
-  const clean = withoutMask(
-    hidden.reduce(removeValueAtPath, isConfigRecord(entry.value) ? entry.value : {}),
+  const key = input.clash === 'keepBoth' ? keepBothName(entry.key, input.shownKeys) : entry.key;
+  const typed = entry.secrets.map((secret): [string, string] => [
+    secret,
+    typedSecret(secret, secrets),
+  ]);
+  const hidden = [
+    ...entry.secrets,
+    ...entry.secrets.map(previewPath),
+    ...(collection?.secret ? [collection.secret.preview] : []),
+  ];
+  const clean = typed.reduce(
+    (record, [secret, value]) => setValueAtPath(record, secret, value),
+    withoutMask(hidden.reduce(removeValueAtPath, isConfigRecord(entry.value) ? entry.value : {})),
   );
-  const step = (ops: t.ConfigChange[]): t.TransferStep => ({
-    target: input.target,
-    key: entry.key,
-    ops,
-  });
+  const step = (ops: t.ConfigChange[]): t.TransferStep => ({ target: input.target, key, ops });
+  const cleared = input.clash === 'replace' ? planRemoval(entry) : [];
   if (collection) {
-    const value = { ...clean, [collection.key]: entry.key };
+    const value = { ...clean, [collection.key]: key };
     return step([
-      { op: 'upsertEntry', path: collection.path, key: entry.key, identity: null, value },
+      ...cleared,
+      { op: 'upsertEntry', path: collection.path, key, identity: null, value },
     ]);
   }
-  if (entry.key.includes('.')) {
-    throw new Error(`${entry.path}: "${entry.key}" has a dot, no path can address it`);
-  }
-  return step(
-    Object.entries(flattenObject(clean))
+  assertAddressable(entry.path, key);
+  return step([
+    ...cleared,
+    ...Object.entries(flattenObject(clean))
       .filter(([, leaf]) => isWritableLeaf(leaf))
       .map(([leaf, value]): t.ConfigChange => {
-        return { op: 'set', path: `${entry.path}.${entry.key}.${leaf}`, value };
+        return { op: 'set', path: `${entry.path}.${key}.${leaf}`, value };
       }),
-  );
+  ]);
 }
