@@ -58,6 +58,17 @@ vi.mock('@/hooks/useCapabilities', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks/useCapabilities')>()),
   useCapabilities: () => ({ hasCapability: () => true }),
 }));
+const dialogRenders = vi.hoisted(() => ({ count: 0 }));
+vi.mock('@/components/configuration/transfer', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/components/configuration/transfer')>();
+  return {
+    ...original,
+    TransferDialog: (props: t.TransferDialogProps) => {
+      dialogRenders.count += 1;
+      return original.TransferDialog(props);
+    },
+  };
+});
 vi.mock('@tanstack/react-router', async (importOriginal) =>
   (await import('@/test/router')).routerless(importOriginal),
 );
@@ -367,6 +378,40 @@ describe('accessible names and reasons of the actions', () => {
     expect(copyOf('mine')).toHaveAccessibleName('Copy to… mine');
     expect(moveOf('fromfile')).toHaveAccessibleDescription(FILE);
     expect(moveOf('mine')).toHaveAccessibleDescription(UNSAVED);
+  });
+});
+
+describe('the transfer dialog is mounted only for a list that can offer the actions', () => {
+  beforeEach(() => {
+    dialogRenders.count = 0;
+  });
+
+  it('mounts it for a top-level record (opening it is covered by the record-entry tests above)', () => {
+    render(<RecordList />);
+    expect(dialogRenders.count).toBeGreaterThan(0);
+  });
+
+  it('mounts it for a by-name list', () => {
+    render(<ListOf path={CUSTOM_PATH} />);
+    expect(dialogRenders.count).toBeGreaterThan(0);
+  });
+
+  it('does not mount it for a record nested inside an entry', () => {
+    render(<RecordList path="mcpServers.a.customUserVars" />);
+    expect(screen.getByText('TOKEN')).toBeVisible();
+    expect(dialogRenders.count).toBe(0);
+  });
+
+  it('does not mount it for a list a profile replaces whole', () => {
+    render(<ListOf path={SPECS_PATH} />);
+    expect(screen.getByText('spec-a')).toBeVisible();
+    expect(dialogRenders.count).toBe(0);
+  });
+
+  it('does not mount it for a feature-gated list the server does not let the panel edit', () => {
+    render(<GroupsList contract={createServerContract({ azureGroupSecrets: false })} />);
+    expect(screen.getByText('east')).toBeVisible();
+    expect(dialogRenders.count).toBe(0);
   });
 });
 

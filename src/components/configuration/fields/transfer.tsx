@@ -7,6 +7,7 @@ import {
   isConfigRecord,
   findStoredSecrets,
   getKeyedCollection,
+  transferEligibility,
 } from '@/utils';
 import {
   useEntryMarkers,
@@ -42,8 +43,13 @@ export function useFieldTransfer(path: string | undefined): {
   const offer = useTransferOffer(path ?? '');
   const collection = path ? getKeyedCollection(path) : undefined;
 
+  const offersAny =
+    path !== undefined &&
+    collection?.gate?.(features) !== false &&
+    transferEligibility(path, { fromFile: false, own: true, writable: true }).copy;
+
   const actionsFor = (key: string, value: t.ConfigValue, disabled = false) => {
-    if (!path || !layers || collection?.gate?.(features) === false) return [];
+    if (!path || !layers || !offersAny) return [];
     if (!collection && key.includes('.')) return [];
     const saved = entryOf(layers.effective, path, key);
     if (saved === undefined) return [];
@@ -59,5 +65,5 @@ export function useFieldTransfer(path: string | undefined): {
     });
   };
 
-  return { actionsFor, dialog: <TransferDialog {...offer.dialog} /> };
+  return { actionsFor, dialog: offersAny ? <TransferDialog {...offer.dialog} /> : null };
 }
