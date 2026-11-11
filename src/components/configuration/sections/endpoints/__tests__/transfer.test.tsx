@@ -245,6 +245,31 @@ describe('Copy to… and Move to… on a custom endpoint row', () => {
     expect(item('Copy to…')).not.toHaveAttribute('aria-disabled');
   });
 
+  it('offers Move for a Base endpoint the profile overrides, since the profile holds its own', () => {
+    const layers = scopeLayersFixture(
+      scopeConfigFixture({
+        overrides: { endpoints: { custom: [{ name: 'Plain', baseURL: 'https://other.x/v1' }] } },
+        resolvedConfig: {},
+        changedPaths: [],
+        tombstones: [],
+      }),
+      baseConfigFixture({ dbOverrides: { endpoints: { custom: [PLAIN] } } }),
+    );
+    render(<Harness layers={layers} />);
+    openMenu('Plain');
+    expect(item('Move to…')).not.toHaveAttribute('aria-disabled');
+    expect(screen.queryByText(BLOCKED.inherited)).toBeNull();
+  });
+
+  it('gives the block reason, not the unsaved hint, for Move on a file endpoint of a dirty page', () => {
+    render(<Harness layers={baseLayers()} isDirty />);
+    openMenu('Claude');
+    expect(item('Move to…')).toHaveAttribute('aria-describedby');
+    expect(screen.getByText(BLOCKED.file)).toBeInTheDocument();
+    expect(screen.getAllByText(UNSAVED)).toHaveLength(1);
+    expect(item('Copy to…')).toHaveAttribute('aria-disabled', 'true');
+  });
+
   it('offers Move for an endpoint the profile holds itself, with the profile as source', async () => {
     render(<Harness layers={scopeLayers()} />);
     openMenu('Own');
