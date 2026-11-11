@@ -255,4 +255,14 @@ describe('TransferDialog', () => {
     expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
     expect(confirm()).toBeDisabled();
   });
+
+  it('keeps the loaded places and the tick when a later refetch fails', async () => {
+    const { client } = renderDialog();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+    scopes.fail = true;
+    await act(() => client.refetchQueries({ queryKey: ['availableScopes'] }));
+    await waitFor(() => expect(client.getQueryState(['availableScopes'])?.status).toBe('error'));
+    expect(screen.getByRole('checkbox', { name: /Team a/ })).toBeChecked();
+    expect(confirm()).toBeEnabled();
+  });
 });

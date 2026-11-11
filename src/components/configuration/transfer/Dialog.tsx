@@ -232,7 +232,9 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
   const confirm = async () => {
     setError(undefined);
     try {
-      const steps = chosen.map((target) => planCopy(entry, { target, ownKeys: new Set(), shownKeys: new Set() }, {}));
+      const steps = chosen.map((target) =>
+        planCopy(entry, { target, ownKeys: new Set(), shownKeys: new Set() }, {}),
+      );
       await transfer.run(
         mode,
         entry,
@@ -257,7 +259,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
             mode={mode}
             entry={entry}
             loading={isPending}
-            failed={isError}
+            failed={isError && query.data === undefined}
             targets={targets}
             ticked={ticked}
             chosen={chosen}
