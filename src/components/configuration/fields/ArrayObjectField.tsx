@@ -5,7 +5,7 @@ import { RowFilterContext } from '@/contexts/RowFilterContext';
 import { getEntryIdentity, getEntryTitle } from './entries';
 import { AddItemButton } from '@/components/shared';
 import { ObjectEntryCard } from './ObjectEntryCard';
-import { useEntryTransfer } from './transfer';
+import { useFieldTransfer } from './transfer';
 import { getEntryKey, getKeyedCollection, isRowVisible } from '@/utils';
 
 /**
@@ -39,7 +39,7 @@ export function ArrayObjectField({
   const localize = useLocalize();
   const rowFilter = useContext(RowFilterContext);
   const markersOf = useEntryMarkers(path);
-  const transfer = useEntryTransfer(path);
+  const transfer = useFieldTransfer(path);
   const identityKey = path ? getKeyedCollection(path)?.key : undefined;
   const items = Array.isArray(value) ? value : [];
   /** Card ids the table of contents and deep links target (`section-endpoints-custom-3`). */

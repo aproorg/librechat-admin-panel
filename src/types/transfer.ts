@@ -39,10 +39,39 @@ export interface TransferResult {
   status: TransferStatus;
   message?: string;
 }
+/** One Copy to… / Move to… item of an entry; `reason` says why it is disabled. */
+export interface TransferAction {
+  mode: TransferMode;
+  label: string;
+  onSelect: () => void;
+  disabled: boolean;
+  reason?: string;
+}
+/** The entry an admin picked an action for. */
+export interface ChosenEntry {
+  key: string;
+  mode: TransferMode;
+  value: ConfigValue;
+  secrets: string[];
+}
+/** What a surface alone knows about one entry; `extraReason` disables both actions ahead of every other reason. */
+export interface TransferFacts {
+  key: string;
+  value: ConfigValue;
+  secrets: string[];
+  fromFile: boolean;
+  own: boolean;
+  writable: boolean;
+  extraReason?: string;
+}
 export interface TransferDialogProps {
   open: boolean;
   mode: TransferMode;
   entry: TransferEntry;
   source: WriteTarget;
   onClose: () => void;
+}
+export interface TransferOffer {
+  itemsFor: (facts: TransferFacts) => TransferAction[];
+  dialog: TransferDialogProps;
 }

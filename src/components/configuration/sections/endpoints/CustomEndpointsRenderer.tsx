@@ -7,7 +7,7 @@ import {
   useEndpointRows,
   useHiddenEntries,
   useConfigContract,
-  useScopeActions,
+  useTransferOffer,
   useEntryOverrideNotes,
 } from '@/hooks';
 import {
@@ -19,7 +19,6 @@ import {
   getSecretCarry,
   getEntryKey,
   getValueAtPath,
-  transferEligibility,
   isAddressableEntryKey,
   findHiddenEndpointUses,
 } from '@/utils';
@@ -38,12 +37,6 @@ import { EndpointCreator } from './Create';
 import { EndpointDrawer } from './Drawer';
 import { EndpointEditor } from './Editor';
 import { Banner } from './Banner';
-
-const MOVE_BLOCKED_REASONS: Readonly<Record<t.MoveBlock, string>> = {
-  readOnly: 'com_config_transfer_blocked_read_only',
-  file: 'com_config_transfer_blocked_file',
-  inherited: 'com_config_transfer_blocked_inherited',
-};
 
 /** Shown once the list is long enough that scanning it is slower than typing. */
 const FILTER_THRESHOLD = 6;
@@ -102,10 +95,10 @@ export function CustomEndpointsRenderer(props: t.FieldRendererProps) {
   const revealTarget = useContext(RevealTargetContext);
   const valuesData = useContext(ConfigValuesContext);
   const effective = valuesData?.layers?.effective ?? null;
-  const editingScope = useScopeActions()?.editingScope;
   const pageErrors = useContext(ConfigErrorsContext);
   const path = `${parentPath}.custom`;
   const collection = getKeyedCollection(path);
+  const offer = useTransferOffer(path);
   const hiddenEntries = useHiddenEntries(path);
   const carriesKey = getSecretCarry(features).endpointRename;
   const overrideNotes = useEntryOverrideNotes(path);
@@ -118,12 +111,6 @@ export function CustomEndpointsRenderer(props: t.FieldRendererProps) {
   const [openKey, setOpenKey] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [overriding, setOverriding] = useState<ReadonlySet<string>>(() => new Set());
-  const [transfer, setTransfer] = useState<{
-    key: string;
-    mode: t.TransferMode;
-    value: t.ConfigValue;
-    secrets: string[];
-  } | null>(null);
   const [revealField, setRevealField] = useState<string | undefined>();
   const [openAfterCreate, setOpenAfterCreate] = useState<string | null>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -558,40 +545,22 @@ export function CustomEndpointsRenderer(props: t.FieldRendererProps) {
 
   const transferActionsOf = (row: t.EndpointRow): t.KebabMenuItem[] => {
     if (!collection || row.loadedName === undefined || row.isNew) return [];
-    const { loadedName } = row;
-    const eligibility = transferEligibility(path, {
-      fromFile: fileNames.has(entryIdentityOf(collection, loadedName)),
-      own: row.origin !== 'inherited' || row.overridden,
-      writable: !disabled,
-    });
-    const choose = (mode: t.TransferMode) => () =>
-      setTransfer({
-        key: loadedName,
-        mode,
+    return offer
+      .itemsFor({
+        key: row.loadedName,
         value: row.saved ?? row.value,
         secrets: row.storedSecret && collection.secret ? [collection.secret.key] : [],
-      });
-    const unsaved =
-      valuesData?.isDirty === true ? localize('com_config_transfer_unsaved') : undefined;
-    const moveReason = eligibility.moveBlocked
-      ? localize(MOVE_BLOCKED_REASONS[eligibility.moveBlocked])
-      : unsaved;
-    const move: t.KebabMenuItem = {
-      label: localize('com_config_transfer_title_move'),
-      icon: 'copy',
-      disabled: moveReason !== undefined,
-      title: moveReason,
-      onClick: choose('move'),
-    };
-    if (disabled) return eligibility.moveBlocked ? [move] : [];
-    const copy: t.KebabMenuItem = {
-      label: localize('com_config_transfer_title_copy'),
-      icon: 'copy',
-      disabled: unsaved !== undefined,
-      title: unsaved,
-      onClick: choose('copy'),
-    };
-    return eligibility.move || eligibility.moveBlocked ? [copy, move] : [copy];
+        fromFile: fileNames.has(entryIdentityOf(collection, row.loadedName)),
+        own: row.origin !== 'inherited' || row.overridden,
+        writable: !disabled,
+      })
+      .map((item): t.KebabMenuItem => ({
+        label: item.label,
+        icon: 'copy',
+        disabled: item.disabled,
+        title: item.reason,
+        onClick: item.onSelect,
+      }));
   };
 
   const isEmpty = rows.length === 0 && removals.length === 0 && hiddenItems.length === 0;
@@ -721,18 +690,7 @@ export function CustomEndpointsRenderer(props: t.FieldRendererProps) {
           />
         )}
       </EndpointDrawer>
-      <TransferDialog
-        open={transfer !== null}
-        mode={transfer?.mode ?? 'copy'}
-        entry={{
-          path,
-          key: transfer?.key ?? '',
-          value: transfer?.value ?? {},
-          secrets: transfer?.secrets ?? [],
-        }}
-        source={editingScope && scope ? { type: 'scope', scope: editingScope } : { type: 'base' }}
-        onClose={() => setTransfer(null)}
-      />
+      <TransferDialog {...offer.dialog} />
       <EndpointCreator
         open={creating}
         fields={entryFields}

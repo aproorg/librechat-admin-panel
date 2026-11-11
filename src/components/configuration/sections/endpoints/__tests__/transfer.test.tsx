@@ -280,9 +280,10 @@ describe('Copy to… and Move to… on a custom endpoint row', () => {
     expect(screen.queryByRole('checkbox', { name: /USER/ })).toBeNull();
   });
 
-  it('disables Move with the read-only reason when the place is not writable', () => {
+  it('offers Copy and disables Move with the read-only reason when the place is not writable', () => {
     render(<Harness layers={baseLayers()} disabled />);
     openMenu('Plain');
+    expect(item('Copy to…')).not.toHaveAttribute('aria-disabled');
     expect(item('Move to…')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByText(BLOCKED.readOnly)).toBeInTheDocument();
   });

@@ -11,14 +11,13 @@ import {
   setValueAtPath,
   removeValueAtPath,
   isCarriableRename,
-  transferEligibility,
   findMovedServerCredentials,
 } from '@/utils';
 import {
   useLocalize,
   useValuesScope,
-  useScopeActions,
   useConfigFeatures,
+  useTransferOffer,
   useEntryOverrideNotes,
 } from '@/hooks';
 import { previewedSecret, storedSecrets, usesSecret } from './validation';
@@ -40,11 +39,6 @@ import { McpNote } from './Note';
 
 const EMPTY_RECORD: t.ConfigRecord = Object.freeze({}) as t.ConfigRecord;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
-const MOVE_BLOCKED_REASONS: Readonly<Record<t.MoveBlock, string>> = {
-  readOnly: 'com_config_transfer_blocked_read_only',
-  file: 'com_config_transfer_blocked_file',
-  inherited: 'com_config_transfer_blocked_inherited',
-};
 const NO_MOVED_CREDENTIALS: ReadonlyMap<string, ReadonlyMap<string, t.MovedCredential>> = new Map();
 
 /** A server's source badge, by edit target and whether the layer beneath defines it. */
@@ -150,7 +144,7 @@ export function McpServersRenderer({
   const rowFilter = useContext(RowFilterContext);
   const valuesData = useContext(ConfigValuesContext);
   const { restates } = useContext(RestatesContext);
-  const editingScope = useScopeActions()?.editingScope;
+  const offer = useTransferOffer(path);
   const { renames, copies } = useContext(RenamesContext);
   const layers = valuesData?.layers ?? null;
   const inScope = Boolean(isEditingScope) && layers?.scope != null;
@@ -184,11 +178,6 @@ export function McpServersRenderer({
   const [createOpen, setCreateOpen] = useState(false);
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
-  const [transfer, setTransfer] = useState<{
-    key: string;
-    mode: t.TransferMode;
-    value: t.ConfigValue;
-  } | null>(null);
   const [unlocked, setUnlocked] = useState<ReadonlySet<string>>(EMPTY_KEYS);
   const [lastDeleted, setLastDeleted] = useState<string | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -605,25 +594,25 @@ export function McpServersRenderer({
     if (key.includes('.')) return actions;
     const isLower = lowerKeys.has(key);
     const isYaml = yamlKeys.has(key);
-    const eligibility = transferEligibility(path, {
-      fromFile: isYaml,
-      own: !isLower || overrides > 0,
-      writable: !disabled,
-    });
     const isStdio = transportOf(value) === 'stdio';
-    const moveReason = ((): string | undefined => {
-      if (isStdio) return localize('com_config_mcp_transport_stdio_desc');
-      if (eligibility.moveBlocked) return localize(MOVE_BLOCKED_REASONS[eligibility.moveBlocked]);
-      return valuesData?.isDirty === true ? localize('com_config_transfer_unsaved') : undefined;
-    })();
-    const moveAction: t.McpServerAction = {
-      id: 'duplicate',
-      label: localize('com_config_transfer_title_move'),
-      onSelect: () => setTransfer({ key, mode: 'move', value: saved[key] }),
-      disabled: moveReason !== undefined,
-      reason: moveReason,
-    };
-    if (disabled) return eligibility.moveBlocked ? [moveAction] : actions;
+    const transferActions = offer
+      .itemsFor({
+        key,
+        value: saved[key],
+        secrets: storedSecrets(saved[key]),
+        fromFile: isYaml,
+        own: !isLower || overrides > 0,
+        writable: !disabled,
+        extraReason: isStdio ? localize('com_config_mcp_transport_stdio_desc') : undefined,
+      })
+      .map((item): t.McpServerAction => ({
+        id: 'duplicate',
+        label: item.label,
+        onSelect: item.onSelect,
+        disabled: item.disabled,
+        reason: item.reason,
+      }));
+    if (disabled) return transferActions;
     const ownerReason = (() => {
       if (!inScope) return localize('com_config_mcp_locked_yaml');
       if (!isYaml) return localize('com_config_mcp_defined_in_base');
@@ -659,18 +648,7 @@ export function McpServersRenderer({
       disabled: isStdio,
       reason: isStdio ? localize('com_config_mcp_transport_stdio_desc') : undefined,
     });
-    const transferReason = ((): string | undefined => {
-      if (isStdio) return localize('com_config_mcp_transport_stdio_desc');
-      return valuesData?.isDirty === true ? localize('com_config_transfer_unsaved') : undefined;
-    })();
-    actions.push({
-      id: 'duplicate',
-      label: localize('com_config_transfer_title_copy'),
-      onSelect: () => setTransfer({ key, mode: 'copy', value: saved[key] }),
-      disabled: transferReason !== undefined,
-      reason: transferReason,
-    });
-    if (eligibility.move || eligibility.moveBlocked) actions.push(moveAction);
+    actions.push(...transferActions);
     if (isLower && overrides > 0) {
       actions.push({
         id: 'revert',
@@ -1010,20 +988,7 @@ export function McpServersRenderer({
             </McpServerCard>
           );
         })}
-        <TransferDialog
-          open={transfer !== null}
-          mode={transfer?.mode ?? 'copy'}
-          entry={{
-            path,
-            key: transfer?.key ?? '',
-            value: transfer?.value ?? EMPTY_RECORD,
-            secrets: storedSecrets(transfer?.value),
-          }}
-          source={
-            editingScope && inScope ? { type: 'scope', scope: editingScope } : { type: 'base' }
-          }
-          onClose={() => setTransfer(null)}
-        />
+        <TransferDialog {...offer.dialog} />
         <CreateMcpServerDialog
           open={createOpen}
           onClose={() => setCreateOpen(false)}

@@ -2,7 +2,6 @@ import { useState, useCallback, useRef, useEffect, useId } from 'react';
 import type * as t from '@/types';
 import { useLocalize, useValuesScope, useConfigKeyProblem, useExpandableState } from '@/hooks';
 import { DecorativeIcon, StateChip } from '@/components/shared';
-import type { EntryTransferAction } from './transfer';
 import { getEntrySummary } from './entries';
 import { sourceLabel } from '../values';
 import { CodeField } from './CodeField';
@@ -54,7 +53,7 @@ export function ObjectEntryCard({
   renderFields,
   editSessionId,
   transferActions,
-}: t.ObjectEntryCardProps & { transferActions?: EntryTransferAction[] }) {
+}: t.ObjectEntryCardProps) {
   const localize = useLocalize();
   const unsafeKeyProblem = useConfigKeyProblem();
   const generatedId = useId();
@@ -384,10 +383,10 @@ export function ObjectEntryCard({
           </button>
         )}
         {transferActions?.map((action) => {
-          const reasonId = `${baseId}-${action.id}-reason`;
+          const reasonId = `${baseId}-${action.mode}-reason`;
           return (
             <button
-              key={action.id}
+              key={action.mode}
               type="button"
               onClick={action.onSelect}
               disabled={action.disabled}
@@ -396,7 +395,7 @@ export function ObjectEntryCard({
               aria-describedby={action.reason ? reasonId : undefined}
               title={action.reason ?? action.label}
             >
-              <DecorativeIcon name={action.id === 'copy' ? 'copy' : 'arrow-right'} size="sm" />
+              <DecorativeIcon name={action.mode === 'copy' ? 'copy' : 'arrow-right'} size="sm" />
               {action.reason && (
                 <span id={reasonId} className="sr-only">
                   {action.reason}

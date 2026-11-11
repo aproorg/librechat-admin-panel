@@ -13,6 +13,7 @@ import type {
 } from './config';
 import type { KeySuggestion, KeyValidator } from './files';
 import type { MovedCredential } from './changes';
+import type { TransferAction } from './transfer';
 
 /**
  * Returns a field to "Default" (removes the edit target's own value). Returns
@@ -409,6 +410,8 @@ export interface ObjectEntryCardProps {
   renderFields: CollectionRenderFields;
   /** See `SingleFieldRendererProps.editSessionId`. Forwarded to `renderFields`. */
   editSessionId?: number;
+  /** Copy to… / Move to… buttons in the header. */
+  transferActions?: TransferAction[];
 }
 
 export interface SwitchObjectFieldProps {
