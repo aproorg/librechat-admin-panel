@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import type { APIRequestContext, Page } from '@playwright/test';
-import { LIVE, MOCK_FIXTURES_SKIP_REASON } from './live';
+import { LIVE, MOCK_BACKEND_URL, MOCK_ADMIN_HEADERS, MOCK_FIXTURES_SKIP_REASON } from './live';
 
 /**
  * Copy and move an MCP server between places. The mock backend serves Base with
@@ -11,13 +11,12 @@ import { LIVE, MOCK_FIXTURES_SKIP_REASON } from './live';
  */
 const SERVER = 'docs';
 const FILE_SERVER = 'filed';
-const MOCK_API = 'http://localhost:3081';
 const HINT = 'Save your changes first';
 const FILE_HINT = "Defined in librechat.yaml, so it can't be moved";
 const INHERITED_HINT = 'This place only inherits it, so there is nothing here to move';
 const READ_ONLY_HINT = "You can't change this place";
 const COPIED_URL = 'https://mcp.example.com/mcp';
-const asAdmin = { headers: { Authorization: 'Bearer test-admin-token' } };
+const asAdmin = { headers: MOCK_ADMIN_HEADERS };
 
 interface Place {
   type: 'role' | 'group';
@@ -25,17 +24,21 @@ interface Place {
 }
 const BASE: Place = { type: 'role', id: '__base__' };
 
-const fieldsUrl = ({ type, id }: Place) => `${MOCK_API}/api/admin/config/${type}/${id}/fields`;
+const fieldsUrl = ({ type, id }: Place) =>
+  `${MOCK_BACKEND_URL}/api/admin/config/${type}/${id}/fields`;
 
 async function engineering(request: APIRequestContext): Promise<Place> {
-  const listed = await request.get(`${MOCK_API}/api/admin/groups?search=Engineering`, asAdmin);
+  const listed = await request.get(
+    `${MOCK_BACKEND_URL}/api/admin/groups?search=Engineering`,
+    asAdmin,
+  );
   const { groups } = await listed.json();
   return { type: 'group', id: groups[0]._id };
 }
 
 async function overridesOf(request: APIRequestContext, place: Place) {
   const stored = await request.get(
-    `${MOCK_API}/api/admin/config/${place.type}/${place.id}`,
+    `${MOCK_BACKEND_URL}/api/admin/config/${place.type}/${place.id}`,
     asAdmin,
   );
   const { config } = await stored.json();
@@ -76,7 +79,9 @@ async function transferToGroup(page: Page, name: string, item: string, action: s
 async function edit(page: Page, value: string) {
   const entry = page.locator(`[data-mcp-server="${SERVER}"]`);
   const url = entry.getByRole('textbox').first();
-  if (!(await url.isVisible())) await entry.locator('button[aria-expanded]').first().click();
+  const toggle = entry.locator('button[aria-expanded]').first();
+  if ((await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
   await url.fill(value);
   await url.press('Tab');
 }
@@ -197,6 +202,38 @@ test.describe('Configuration: copy and move an MCP server between places', () =>
       await expect(page.getByRole('menuitem', { name: 'Move to…' })).toBeEnabled();
     } finally {
       await clean(request, own);
+    }
+  });
+
+  test('offers Move to… for a server the open profile overrides, and not for one it only inherits', async ({
+    page,
+    request,
+  }) => {
+    const overridden = 'over-src';
+    const group = await engineering(request);
+    await clean(request, overridden);
+    await seed(request, BASE, overridden);
+    const override = {
+      fieldPath: `mcpServers.${overridden}.url`,
+      value: 'https://over.example.com/mcp',
+    };
+    const saved = await request.patch(fieldsUrl(group), {
+      ...asAdmin,
+      data: { entries: [override] },
+    });
+    expect(saved.ok(), 'seeding the override').toBe(true);
+    try {
+      await page.goto(`/configuration?tab=mcp&scope=group:${group.id}`);
+      await openMenu(page, overridden);
+      await expect(page.getByRole('menuitem', { name: 'Move to…' })).toBeEnabled();
+      await page.keyboard.press('Escape');
+
+      await openMenu(page, SERVER);
+      const item = page.getByRole('menuitem', { name: /Move to…/ });
+      await expect(item).toBeDisabled();
+      await expect(item).toHaveAccessibleDescription(INHERITED_HINT);
+    } finally {
+      await clean(request, overridden);
     }
   });
 
