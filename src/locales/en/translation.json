@@ -4060,5 +4060,6 @@
   "com_config_transfer_stale": "Not saved, changed by someone else",
   "com_config_transfer_skipped": "Skipped",
   "com_config_transfer_open": "Open",
+  "com_config_transfer_unsaved": "Save or discard your changes first",
   "com_a11y_logo_alt": "LibreChat logo"
 }

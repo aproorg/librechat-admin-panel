@@ -314,6 +314,41 @@ const admin =
   (...args) =>
     authFailure(args[1]) ?? handler(...args);
 
+// ── Configuration documents ───────────────────────────────────────────
+// Base's admin override document and one profile, with the one MCP server Base
+// carries. `PATCH …/fields` stores into them, so a copy sticks until restart.
+
+const BASE_CONFIG_ID = '__base__';
+const configDoc = (principalType, principalId, overrides) => ({
+  _id: objectId(),
+  principalType,
+  principalId,
+  priority: principalId === BASE_CONFIG_ID ? 0 : 10,
+  isActive: true,
+  overrides,
+  tombstones: [],
+  revision: '1',
+  configVersion: 1,
+  createdAt: new Date(SEEDED_AT).toISOString(),
+  updatedAt: new Date(SEEDED_AT).toISOString(),
+});
+
+const configDocs = [
+  configDoc(PrincipalType.ROLE, BASE_CONFIG_ID, {
+    mcpServers: { docs: { type: 'streamable-http', url: 'https://mcp.example.com/mcp' } },
+  }),
+  configDoc(PrincipalType.GROUP, groups[0]._id, {}),
+];
+const findConfigDoc = (principalType, principalId) =>
+  configDocs.find((doc) => doc.principalType === principalType && doc.principalId === principalId);
+
+function setAtPath(target, path, value) {
+  const keys = path.split('.');
+  const last = keys.pop();
+  const parent = keys.reduce((node, key) => (node[key] ??= {}), target);
+  parent[last] = value;
+}
+
 // ── Routes ───────────────────────────────────────────────────────────
 // Keyed `METHOD /path`. A `:param` segment matches any one segment and the
 // first match in declaration order wins, so literal paths come before
@@ -502,6 +537,11 @@ const handlers = {
     groups.push(group);
     return [201, { group }];
   }),
+  'GET /api/admin/groups/:id': admin((_body, _req, { id }) => {
+    if (!isObjectId(id)) return INVALID_GROUP_ID;
+    const group = findGroup(id);
+    return group ? [200, { group }] : GROUP_NOT_FOUND;
+  }),
   'PATCH /api/admin/groups/:id': admin((body, _req, { id }) => {
     if (!isObjectId(id)) return INVALID_GROUP_ID;
     if (body.name !== undefined && (typeof body.name !== 'string' || !body.name.trim()))
@@ -631,6 +671,30 @@ const handlers = {
     const entry = auditLog.find((candidate) => candidate.id === id);
     return entry ? [200, { entry }] : [404, { error: 'Not found' }];
   }),
+  'GET /api/admin/config': admin(() => [
+    200,
+    { configs: configDocs.filter((doc) => doc.principalId !== BASE_CONFIG_ID) },
+  ]),
+  'GET /api/admin/config/base': admin((_body, _req, _params, query) => {
+    const { overrides } = findConfigDoc(PrincipalType.ROLE, BASE_CONFIG_ID);
+    const effective = query.get('baseOnly') === 'true' ? {} : overrides;
+    return [200, { config: { config: {}, ...effective } }];
+  }),
+  'GET /api/admin/config/:principalType/:principalId': admin(
+    (_body, _req, { principalType, principalId }) => {
+      const config = findConfigDoc(principalType, principalId);
+      return config ? [200, { config }] : [404, { error: 'Not found' }];
+    },
+  ),
+  'PATCH /api/admin/config/:principalType/:principalId/fields': admin(
+    (body, _req, { principalType, principalId }) => {
+      const config = findConfigDoc(principalType, principalId);
+      if (!config) return [404, { error: 'Not found' }];
+      body.entries.forEach(({ fieldPath, value }) => setAtPath(config.overrides, fieldPath, value));
+      config.revision = String(Number(config.revision) + 1);
+      return [200, { config }];
+    },
+  ),
   'GET /api/config': () => [
     200,
     {

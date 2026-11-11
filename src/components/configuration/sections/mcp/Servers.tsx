@@ -13,8 +13,15 @@ import {
   isCarriableRename,
   findMovedServerCredentials,
 } from '@/utils';
-import { useLocalize, useValuesScope, useConfigFeatures, useEntryOverrideNotes } from '@/hooks';
+import {
+  useLocalize,
+  useValuesScope,
+  useScopeActions,
+  useConfigFeatures,
+  useEntryOverrideNotes,
+} from '@/hooks';
 import { previewedSecret, storedSecrets, usesSecret } from './validation';
+import { TransferDialog } from '@/components/configuration/transfer';
 import { ConfiguredOnlyContext } from '@/contexts/ConfiguredOnlyContext';
 import { ConfigValuesContext } from '@/contexts/ConfigValuesContext';
 import { McpDeletedRow, McpHiddenRow, McpServerCard } from './Card';
@@ -137,6 +144,7 @@ export function McpServersRenderer({
   const rowFilter = useContext(RowFilterContext);
   const valuesData = useContext(ConfigValuesContext);
   const { restates } = useContext(RestatesContext);
+  const editingScope = useScopeActions()?.editingScope;
   const { renames, copies } = useContext(RenamesContext);
   const layers = valuesData?.layers ?? null;
   const inScope = Boolean(isEditingScope) && layers?.scope != null;
@@ -170,6 +178,7 @@ export function McpServersRenderer({
   const [createOpen, setCreateOpen] = useState(false);
   const [justAdded, setJustAdded] = useState<string | null>(null);
   const [renaming, setRenaming] = useState<string | null>(null);
+  const [transferKey, setTransferKey] = useState<string | null>(null);
   const [unlocked, setUnlocked] = useState<ReadonlySet<string>>(EMPTY_KEYS);
   const [lastDeleted, setLastDeleted] = useState<string | null>(null);
   const [focusKey, setFocusKey] = useState<string | null>(null);
@@ -581,6 +590,9 @@ export function McpServersRenderer({
     return overrideNotes.moved(key, { lower: lower[key], before: saved[key], after: value });
   };
 
+  const hasUnsavedEdits = Object.keys(edits).length > 0 || Object.keys(restates).length > 0;
+  const transferValue = transferKey === null ? undefined : saved[transferKey];
+
   const actionsFor = (key: string, value: t.ConfigRecord, overrides: number) => {
     const actions: t.McpServerAction[] = [];
     if (disabled || key.includes('.')) return actions;
@@ -621,6 +633,17 @@ export function McpServersRenderer({
       onSelect: () => handleDuplicate(key),
       disabled: isStdio,
       reason: isStdio ? localize('com_config_mcp_transport_stdio_desc') : undefined,
+    });
+    const transferReason = ((): string | undefined => {
+      if (isStdio) return localize('com_config_mcp_transport_stdio_desc');
+      return hasUnsavedEdits ? localize('com_config_transfer_unsaved') : undefined;
+    })();
+    actions.push({
+      id: 'duplicate',
+      label: localize('com_config_transfer_title_copy'),
+      onSelect: () => setTransferKey(key),
+      disabled: transferReason !== undefined,
+      reason: transferReason,
     });
     if (isLower && overrides > 0) {
       actions.push({
@@ -961,6 +984,20 @@ export function McpServersRenderer({
             </McpServerCard>
           );
         })}
+        <TransferDialog
+          open={transferValue !== undefined}
+          mode="copy"
+          entry={{
+            path,
+            key: transferKey ?? '',
+            value: transferValue ?? EMPTY_RECORD,
+            secrets: storedSecrets(transferValue),
+          }}
+          source={
+            editingScope && inScope ? { type: 'scope', scope: editingScope } : { type: 'base' }
+          }
+          onClose={() => setTransferKey(null)}
+        />
         <CreateMcpServerDialog
           open={createOpen}
           onClose={() => setCreateOpen(false)}
