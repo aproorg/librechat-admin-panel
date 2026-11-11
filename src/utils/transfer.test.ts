@@ -199,6 +199,41 @@ describe('planCopy', () => {
     ]);
   });
 
+  it('drops a masked leaf of a keyed entry even when secrets does not list it', () => {
+    const entry: t.TransferEntry = {
+      path: 'endpoints.custom',
+      key: 'K',
+      value: { name: 'K', apiKey: MASKED_SECRET, baseURL: 'u' },
+      secrets: [],
+    };
+    const step = planCopy(entry, input(sales), {});
+    expect(JSON.stringify(step)).not.toContain(MASKED_SECRET);
+    expect(step?.ops).toEqual([
+      {
+        op: 'upsertEntry',
+        path: 'endpoints.custom',
+        key: 'K',
+        identity: null,
+        value: { name: 'K', baseURL: 'u' },
+      },
+    ]);
+  });
+
+  it('drops a nested masked leaf of an MCP server even when secrets does not list it', () => {
+    const entry: t.TransferEntry = {
+      path: 'mcpServers',
+      key: 'K',
+      value: { url: 'u', headers: { A: MASKED_SECRET, B: 'b' } },
+      secrets: [],
+    };
+    const step = planCopy(entry, input(sales), {});
+    expect(JSON.stringify(step)).not.toContain(MASKED_SECRET);
+    expect(step?.ops).toEqual([
+      { op: 'set', path: 'mcpServers.K.url', value: 'u' },
+      { op: 'set', path: 'mcpServers.K.headers.B', value: 'b' },
+    ]);
+  });
+
   it('does not write empty objects or nulls', () => {
     const entry: t.TransferEntry = {
       path: 'mcpServers',

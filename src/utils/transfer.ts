@@ -4,6 +4,7 @@ import { schemaType, unwrapSchema, resolveSubSchema } from './schema';
 import { flattenObject, isConfigRecord, removeValueAtPath } from './format';
 import { getKeyedCollection } from './collections';
 import { isSameScope } from './scopes';
+import { MASKED_SECRET } from './secrets';
 
 export const MAX_TRANSFER_TARGETS = 10;
 
@@ -54,6 +55,17 @@ function isWritableLeaf(leaf: t.ConfigValue): boolean {
   return !(isConfigRecord(leaf) && Object.keys(leaf).length === 0);
 }
 
+function withoutMask(record: t.ConfigRecord): t.ConfigRecord {
+  return Object.fromEntries(
+    Object.entries(record)
+      .filter(([, leaf]) => leaf !== MASKED_SECRET)
+      .map(([key, leaf]): [string, t.ConfigValue] => [
+        key,
+        isConfigRecord(leaf) ? withoutMask(leaf) : leaf,
+      ]),
+  );
+}
+
 /** The writes that put `entry` in one target, as today's create flow emits them. */
 export function planCopy(
   entry: t.TransferEntry,
@@ -62,7 +74,9 @@ export function planCopy(
 ): t.TransferStep | null {
   const collection = getKeyedCollection(entry.path);
   const hidden = collection?.secret ? [...entry.secrets, collection.secret.preview] : entry.secrets;
-  const clean = hidden.reduce(removeValueAtPath, isConfigRecord(entry.value) ? entry.value : {});
+  const clean = withoutMask(
+    hidden.reduce(removeValueAtPath, isConfigRecord(entry.value) ? entry.value : {}),
+  );
   const step = (ops: t.ConfigChange[]): t.TransferStep => ({
     target: input.target,
     key: entry.key,
