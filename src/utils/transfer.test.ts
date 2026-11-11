@@ -3,6 +3,7 @@ import { PrincipalType } from 'librechat-data-provider';
 import type * as t from '@/types';
 import { MASKED_SECRET } from './secrets';
 import { planConfigChanges } from './changes';
+import { mergeConfigLayers } from './collections';
 import {
   transferTargets,
   transferEligibility,
@@ -651,6 +652,15 @@ describe('planCopy ops through the real write planner', () => {
     const ops = planCopy(entry, wanted, {})?.ops ?? [];
     return planConfigChanges(ops, { stored, tombstones: [], lower, lowerKind: 'inherited' });
   };
+  const plan2 = (
+    entry: t.TransferEntry,
+    wanted: t.TransferTargetInput,
+    stored: t.ConfigRecord,
+    secrets: Record<string, string>,
+  ) => {
+    const ops = planCopy(entry, wanted, secrets)?.ops ?? [];
+    return planConfigChanges(ops, { stored, tombstones: [], lower: {}, lowerKind: 'inherited' });
+  };
   const custom = (...list: t.ConfigRecord[]): t.ConfigRecord => ({ endpoints: { custom: list } });
   const ownList = (after: t.ConfigRecord): t.ConfigValue =>
     (after.endpoints as t.ConfigRecord | undefined)?.custom ?? null;
@@ -673,9 +683,94 @@ describe('planCopy ops through the real write planner', () => {
     expect(ownList(got.storedAfter)).toEqual([copied.value]);
   });
 
-  it('is refused, not half-applied, when replacing an own entry the layer below also has', () => {
+  it('is refused, not half-applied, when replacing an own entry the layer below also has and no current entry is given', () => {
     const got = plan(copied, target(['K'], ['K'], 'replace'), custom(ownK), custom(lowerK));
     expect(got.issues.length).toBeGreaterThan(0);
+  });
+
+  describe('replace with the entry the target shows', () => {
+    const withCurrent = (current: t.ConfigValue, own: string[] = ['K']) => ({
+      ...target(own, ['K'], 'replace'),
+      current,
+    });
+    const effective = (after: t.ConfigRecord, lower: t.ConfigValue): t.ConfigValue =>
+      mergeConfigLayers(lower, (ownList(after) as t.ConfigValue[])[0]);
+
+    it('replaces an own-only entry as one upsert with the shown entry as baseline', () => {
+      const ops = planCopy(copied, withCurrent(ownK), {})?.ops;
+      expect(ops).toEqual([
+        {
+          op: 'upsertEntry',
+          path: 'endpoints.custom',
+          key: 'K',
+          identity: 'K',
+          baseline: ownK,
+          value: copied.value,
+        },
+      ]);
+      const got = plan(copied, withCurrent(ownK), custom(ownK), {});
+      expect(got.issues).toEqual([]);
+      expect(effective(got.storedAfter, undefined)).toEqual(copied.value);
+    });
+
+    it('replaces an own entry over the layer below: no issue, copied fields shown, no stale own field', () => {
+      const shown = mergeConfigLayers(lowerK, ownK);
+      const got = plan(copied, withCurrent(shown), custom(ownK), custom(lowerK));
+      expect(got.issues).toEqual([]);
+      expect(effective(got.storedAfter, lowerK)).toEqual(copied.value);
+    });
+
+    it('drops an own field the copy lacks, and keeps a field only the lower layer has', () => {
+      const lacking: t.TransferEntry = {
+        ...copied,
+        value: { name: 'K', baseURL: 'https://new' },
+      };
+      const ownWide = {
+        name: 'K',
+        baseURL: 'https://old',
+        headers: { Stale: '1' },
+        titleModel: 'x',
+      };
+      const shown = mergeConfigLayers(lowerK, ownWide);
+      const got = plan(lacking, withCurrent(shown), custom(ownWide), custom(lowerK));
+      expect(got.issues).toEqual([]);
+      const after = effective(got.storedAfter, lowerK) as t.ConfigRecord;
+      expect(after).toEqual({ ...lowerK, baseURL: 'https://new' });
+      expect(after).not.toHaveProperty('headers');
+      expect(after).not.toHaveProperty('titleModel');
+    });
+
+    it('writes the typed secret and never a preview field', () => {
+      const keyed: t.TransferEntry = {
+        ...copied,
+        value: {
+          ...(copied.value as t.ConfigRecord),
+          apiKey: MASKED_SECRET,
+          apiKeyPreview: 'sk-…1',
+        },
+        secrets: ['apiKey'],
+      };
+      const ownKeyed = { name: 'K', apiKeyPreview: 'sk-…9', baseURL: 'https://old' };
+      const got = plan2(keyed, withCurrent(ownKeyed), custom(ownKeyed), { apiKey: 'typed-key' });
+      expect(got.issues).toEqual([]);
+      const after = effective(got.storedAfter, undefined) as t.ConfigRecord;
+      expect(after.apiKey).toBe('typed-key');
+      expect(JSON.stringify(got.storedAfter)).not.toContain('Preview');
+      expect(JSON.stringify(got.storedAfter)).not.toContain(MASKED_SECRET);
+    });
+
+    it('ignores the shown entry for a record entry', () => {
+      const server: t.TransferEntry = {
+        path: 'mcpServers',
+        key: 'BC',
+        value: { type: 'sse', url: 'https://new/' },
+        secrets: [],
+      };
+      const wanted = { ...target(['BC'], ['BC'], 'replace'), current: { type: 'sse', url: 'x' } };
+      expect(planCopy(server, wanted, {})?.ops).toEqual(
+        planCopy(server, target(['BC'], ['BC'], 'replace'), {})?.ops,
+      );
+    });
   });
 
   it('keeps both next to an own entry under a free name', () => {

@@ -77,6 +77,12 @@ function namesAt(layer: t.ConfigValue, entry: t.TransferEntry): Set<string> {
   return new Set(isConfigRecord(list) ? Object.keys(list) : []);
 }
 
+function shownEntry(layer: t.ConfigValue, entry: t.TransferEntry): t.ConfigValue {
+  const collection = getKeyedCollection(entry.path);
+  if (!collection) return undefined;
+  return entriesByKey(getValueAtPath(layer, entry.path), collection.key).get(entry.key);
+}
+
 function namesOf(
   entry: t.TransferEntry,
   base: t.BaseConfigData,
@@ -87,10 +93,15 @@ function namesOf(
     return {
       ownKeys: namesAt(base.dbOverrides ?? {}, entry),
       shownKeys: namesAt(base.config, entry),
+      current: shownEntry(base.config, entry),
     };
   }
   const shown = merge(base.config, scope);
-  return { ownKeys: namesAt(scope.overrides, entry), shownKeys: namesAt(shown, entry) };
+  return {
+    ownKeys: namesAt(scope.overrides, entry),
+    shownKeys: namesAt(shown, entry),
+    current: shownEntry(shown, entry),
+  };
 }
 
 /** The names each ticked target holds and shows, by key; a target whose layers are loading or failed has none. */

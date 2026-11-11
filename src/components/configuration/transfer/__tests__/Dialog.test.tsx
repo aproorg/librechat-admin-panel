@@ -370,6 +370,41 @@ describe('TransferDialog', () => {
       expect(sentOps()).toContainEqual({ op: 'set', path: 'mcpServers.Notes.type', value: 'sse' });
     });
 
+    it('replace on a keyed list sends one upsert whose baseline is the entry the place shows', async () => {
+      const custom: t.TransferEntry = {
+        path: 'endpoints.custom',
+        key: 'Notes',
+        value: { name: 'Notes', baseURL: 'https://new' },
+        secrets: [],
+      };
+      scopes.base = {
+        config: {
+          endpoints: {
+            custom: [{ name: 'Notes', apiKey: 'user_provided', baseURL: 'https://low' }],
+          },
+        },
+        dbOverrides: {},
+      };
+      scopes.docs = {
+        a: { overrides: { endpoints: { custom: [{ name: 'Notes', baseURL: 'https://own' }] } } },
+      };
+      renderDialog({ type: 'base' }, vi.fn(), { entry: custom });
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await choose('Team a', 'Replace it');
+      await clickConfirm();
+      await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+      expect(sentOps()).toEqual([
+        {
+          op: 'upsertEntry',
+          path: 'endpoints.custom',
+          key: 'Notes',
+          identity: 'Notes',
+          baseline: { name: 'Notes', apiKey: 'user_provided', baseURL: 'https://own' },
+          value: { name: 'Notes', baseURL: 'https://new' },
+        },
+      ]);
+    });
+
     it('keep both writes under a name no shown entry has, using every name the place shows', async () => {
       scopes.base = { config: { mcpServers: { 'Notes-copy': { url: 'y' } } }, dbOverrides: {} };
       scopes.docs = { a: holdsNotes };

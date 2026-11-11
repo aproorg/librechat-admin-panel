@@ -132,6 +132,12 @@ export function planCopy(
   const identity = inherited ? key : null;
   if (collection) {
     const value = { ...clean, [collection.key]: key };
+    const { current: baseline } = input;
+    if (input.clash === 'replace' && baseline !== undefined) {
+      return step([
+        { op: 'upsertEntry', path: collection.path, key, identity: key, baseline, value },
+      ]);
+    }
     return step([...cleared, { op: 'upsertEntry', path: collection.path, key, identity, value }]);
   }
   assertAddressable(entry.path, key);

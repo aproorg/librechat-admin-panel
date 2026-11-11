@@ -17,8 +17,10 @@ export interface TransferTargetInput {
   ownKeys: ReadonlySet<string>;
   shownKeys: ReadonlySet<string>;
   clash?: ClashChoice;
+  /** The entry the target shows under the entry's name; a keyed-list replace sends it as the upsert baseline. */
+  current?: ConfigValue;
 }
-export type TransferNames = Pick<TransferTargetInput, 'ownKeys' | 'shownKeys'>;
+export type TransferNames = Pick<TransferTargetInput, 'ownKeys' | 'shownKeys' | 'current'>;
 export interface TransferStep {
   target: WriteTarget;
   key: string;
