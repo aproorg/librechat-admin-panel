@@ -4059,7 +4059,14 @@
   "com_config_transfer_failed": "Not saved",
   "com_config_transfer_stale": "Not saved, changed by someone else",
   "com_config_transfer_skipped": "Skipped",
-  "com_config_transfer_open": "Open",
+  "com_config_transfer_names_loading": "Checking the names in the places you ticked…",
+  "com_config_transfer_clash": "\"{{name}}\" already exists in {{place}}",
+  "com_config_transfer_clash_replace": "Replace it",
+  "com_config_transfer_clash_keep_both": "Keep both",
+  "com_config_transfer_clash_skip": "Skip this place",
+  "com_config_transfer_secret": "Type {{path}} again",
+  "com_config_transfer_original": "Original in {{place}}",
+  "com_config_transfer_kept": "The original was kept",
   "com_config_transfer_unsaved": "Save your changes first",
   "com_a11y_logo_alt": "LibreChat logo"
 }

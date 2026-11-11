@@ -12,15 +12,28 @@ const scopes = vi.hoisted(() => ({
   pending: false,
   fail: false,
   canManage: true,
+  base: { config: {}, dbOverrides: {} } as { config: object; dbOverrides: object },
+  docs: {} as Record<string, { overrides?: object; tombstones?: string[] }>,
+  hold: null as Promise<void> | null,
 }));
 
 vi.mock('@/server', () => ({
   applyConfigChangesFn: vi.fn(),
   baseConfigOptions: {
     queryKey: ['baseConfig'],
-    queryFn: () => Promise.resolve({ dbRevision: 'base-rev' }),
+    queryFn: () => Promise.resolve({ dbRevision: 'base-rev', ...scopes.base }),
   },
-  getResolvedConfigFn: () => Promise.resolve({ revision: 'scope-rev' }),
+  getResolvedConfigFn: async ({ data }: { data: { principalId: string } }) => {
+    await scopes.hold;
+    return {
+      revision: 'scope-rev',
+      resolvedConfig: {},
+      changedPaths: [],
+      tombstones: [],
+      overrides: {},
+      ...scopes.docs[data.principalId],
+    };
+  },
   availableScopesOptions: {
     queryKey: ['availableScopes'],
     queryFn: () => {
@@ -60,23 +73,34 @@ const ok = (): t.ApplyConfigChangesResult => ({
   reported: [],
 });
 
-function renderDialog(source: t.WriteTarget = { type: 'base' }, onClose = vi.fn()) {
+function renderDialog(
+  source: t.WriteTarget = { type: 'base' },
+  onClose = vi.fn(),
+  props: Partial<t.TransferDialogProps> = {},
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <TransferDialog open mode="copy" entry={entry} source={source} onClose={onClose} />
+      <TransferDialog open mode="copy" entry={entry} source={source} onClose={onClose} {...props} />
     </QueryClientProvider>,
   );
   return { onClose, client };
 }
 
 const confirm = () => screen.getByRole('button', { name: 'Copy' });
+const clickConfirm = async () => {
+  await waitFor(() => expect(confirm()).toBeEnabled());
+  fireEvent.click(confirm());
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
   scopes.pending = false;
   scopes.fail = false;
   scopes.canManage = true;
+  scopes.base = { config: {}, dbOverrides: {} };
+  scopes.docs = {};
+  scopes.hold = null;
   scopes.list = [profile('a'), profile('b', false)];
   applyMock.mockResolvedValue(ok());
 });
@@ -112,7 +136,7 @@ describe('TransferDialog', () => {
   it('keeps confirm disabled with zero ticks and enables it with one', async () => {
     renderDialog();
     fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
-    expect(confirm()).toBeEnabled();
+    await waitFor(() => expect(confirm()).toBeEnabled());
     fireEvent.click(screen.getByRole('checkbox', { name: /Team a/ }));
     expect(confirm()).toBeDisabled();
   });
@@ -174,7 +198,7 @@ describe('TransferDialog', () => {
     renderDialog();
     fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Team b/ }));
-    fireEvent.click(confirm());
+    await clickConfirm();
     const link = await screen.findByRole('link', { name: /Group: Team a/ });
     expect(link).toHaveAttribute('href', '/configuration?scope=group%3Aa');
     expect(await screen.findByRole('link', { name: /Group: Team b/ })).toBeVisible();
@@ -189,7 +213,7 @@ describe('TransferDialog', () => {
     });
     renderDialog();
     fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
-    fireEvent.click(confirm());
+    await clickConfirm();
     expect(await screen.findByText(/boom/)).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /Team a/ })).not.toBeInTheDocument();
     applyMock.mockResolvedValue(ok());
@@ -202,7 +226,7 @@ describe('TransferDialog', () => {
     applyMock.mockResolvedValueOnce({ ...ok(), applied: 0, conflict: true });
     renderDialog();
     fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
-    fireEvent.click(confirm());
+    await clickConfirm();
     const row = await screen.findByTestId('transfer-result');
     expect(within(row).getByText(/changed by someone else/)).toBeInTheDocument();
   });
@@ -210,7 +234,7 @@ describe('TransferDialog', () => {
   it('shows no Retry when every place saved', async () => {
     renderDialog();
     fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
-    fireEvent.click(confirm());
+    await clickConfirm();
     await screen.findByRole('link', { name: /Team a/ });
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
   });
@@ -253,7 +277,7 @@ describe('TransferDialog', () => {
     applyMock.mockResolvedValueOnce({ ...ok(), applied: 0, conflict: true });
     renderDialog();
     fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
-    fireEvent.click(confirm());
+    await clickConfirm();
     await screen.findByTestId('transfer-result');
     expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
   });
@@ -273,6 +297,303 @@ describe('TransferDialog', () => {
     await act(() => client.refetchQueries({ queryKey: ['availableScopes'] }));
     await waitFor(() => expect(client.getQueryState(['availableScopes'])?.status).toBe('error'));
     expect(screen.getByRole('checkbox', { name: /Team a/ })).toBeChecked();
-    expect(confirm()).toBeEnabled();
+    await waitFor(() => expect(confirm()).toBeEnabled());
+  });
+
+  describe('names, clashes and secrets', () => {
+    const holdsNotes = { overrides: { mcpServers: { Notes: { url: 'x' } } }, tombstones: [] };
+    const group = (id: string) => screen.getByRole('checkbox', { name: new RegExp(`Team ${id}`) });
+    const choose = async (place: string, label: string) => {
+      const radios = within(await screen.findByRole('radiogroup', { name: new RegExp(place) }));
+      fireEvent.click(radios.getByRole('radio', { name: label }));
+    };
+    const sentOps = (call = 0) => applyMock.mock.calls[call][0].data.ops;
+
+    it('keeps confirm disabled while a ticked place is still loading its names, and enables it after', async () => {
+      let release = () => {};
+      scopes.hold = new Promise<void>((resolve) => (release = resolve));
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      expect(await screen.findByText(/Checking the names/)).toBeVisible();
+      expect(confirm()).toBeDisabled();
+      release();
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      expect(screen.queryByText(/Checking the names/)).not.toBeInTheDocument();
+    });
+
+    it('asks only for a place whose own layer holds the name, and confirm waits for the choice', async () => {
+      scopes.docs = { a: holdsNotes };
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      fireEvent.click(group('b'));
+      expect(await screen.findAllByRole('radiogroup')).toHaveLength(1);
+      expect(screen.getByRole('radiogroup', { name: /Team a/ })).toBeVisible();
+      expect(screen.queryByRole('radiogroup', { name: /Team b/ })).not.toBeInTheDocument();
+      expect(screen.queryAllByRole('radio', { checked: true })).toHaveLength(0);
+      expect(confirm()).toBeDisabled();
+      await choose('Team a', 'Skip this place');
+      expect(confirm()).toBeEnabled();
+    });
+
+    it('asks nothing for a name the place only inherits', async () => {
+      scopes.base = { config: { mcpServers: { Notes: { url: 'x' } } }, dbOverrides: {} };
+      renderDialog({ type: 'scope', scope: profile('b') });
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+    });
+
+    it('asks for Base when Base holds the name in its own overrides', async () => {
+      scopes.base = { config: {}, dbOverrides: { mcpServers: { Notes: { url: 'x' } } } };
+      renderDialog({ type: 'scope', scope: profile('a') });
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Base configuration/ }));
+      expect(await screen.findByRole('radiogroup', { name: /Base configuration/ })).toBeVisible();
+      expect(confirm()).toBeDisabled();
+    });
+
+    it('replace clears the own entry first, then writes it', async () => {
+      scopes.docs = { a: holdsNotes };
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await choose('Team a', 'Replace it');
+      await clickConfirm();
+      await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+      expect(sentOps()[0]).toEqual({ op: 'reset', path: 'mcpServers.Notes' });
+      expect(sentOps()).toContainEqual({ op: 'set', path: 'mcpServers.Notes.type', value: 'sse' });
+    });
+
+    it('keep both writes under a name no shown entry has, using every name the place shows', async () => {
+      scopes.base = { config: { mcpServers: { 'Notes-copy': { url: 'y' } } }, dbOverrides: {} };
+      scopes.docs = { a: holdsNotes };
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await choose('Team a', 'Keep both');
+      await clickConfirm();
+      await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+      expect(sentOps()).toContainEqual({
+        op: 'set',
+        path: 'mcpServers.Notes-copy-2.type',
+        value: 'sse',
+      });
+    });
+
+    it('skip writes nothing for that place and still writes the others', async () => {
+      scopes.docs = { a: holdsNotes };
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      fireEvent.click(group('b'));
+      await choose('Team a', 'Skip this place');
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      await clickConfirm();
+      expect(await screen.findByRole('link', { name: /Team b/ })).toBeVisible();
+      expect(applyMock).toHaveBeenCalledTimes(1);
+      expect(screen.getAllByTestId('transfer-result')).toHaveLength(1);
+    });
+
+    it('closes without a save when every place is skipped', async () => {
+      scopes.docs = { a: holdsNotes };
+      const { onClose } = renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await choose('Team a', 'Skip this place');
+      await clickConfirm();
+      expect(onClose).toHaveBeenCalled();
+      expect(applyMock).not.toHaveBeenCalled();
+    });
+
+    it('forgets a choice when the place is unticked, so ticking it again asks again', async () => {
+      scopes.docs = { a: holdsNotes };
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await choose('Team a', 'Replace it');
+      expect(confirm()).toBeEnabled();
+      fireEvent.click(group('a'));
+      fireEvent.click(group('a'));
+      await screen.findByRole('radiogroup', { name: /Team a/ });
+      expect(screen.queryAllByRole('radio', { checked: true })).toHaveLength(0);
+      expect(confirm()).toBeDisabled();
+    });
+
+    it('a ticked place that leaves the list keeps no choice and does not count as chosen', async () => {
+      scopes.docs = { a: holdsNotes };
+      const { client } = renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      fireEvent.click(group('b'));
+      await choose('Team a', 'Replace it');
+      scopes.list = [profile('b', false)];
+      await act(() => client.invalidateQueries({ queryKey: ['availableScopes'] }));
+      await waitFor(() => expect(screen.queryByRole('checkbox', { name: /Team a/ })).toBeNull());
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+      expect(confirm()).toBeEnabled();
+      await clickConfirm();
+      expect(await screen.findByRole('link', { name: /Team b/ })).toBeVisible();
+      expect(sentOps()[0]).not.toEqual({ op: 'reset', path: 'mcpServers.Notes' });
+    });
+
+    describe('typed secrets', () => {
+      const secretEntry: t.TransferEntry = {
+        path: 'mcpServers',
+        key: 'Notes',
+        value: {
+          type: 'sse',
+          url: 'https://notes.example.com/sse',
+          oauth: { client_id: 'id', client_secret: '********' },
+          apiKey: { source: 'admin', key: '********' },
+        },
+        secrets: ['oauth.client_secret', 'apiKey.key'],
+      };
+      const field = (name: RegExp) => screen.getByLabelText(name, { selector: 'input' });
+
+      it('asks for each secret by its path, as a password input, and confirm waits for every one', async () => {
+        renderDialog(undefined, undefined, { entry: secretEntry });
+        fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+        await waitFor(() =>
+          expect(field(/oauth\.client_secret/)).toHaveAttribute('type', 'password'),
+        );
+        expect(field(/apiKey\.key/)).toHaveAttribute('type', 'password');
+        expect(confirm()).toBeDisabled();
+        fireEvent.change(field(/oauth\.client_secret/), { target: { value: 'sec1' } });
+        expect(confirm()).toBeDisabled();
+        fireEvent.change(field(/apiKey\.key/), { target: { value: 'sec2' } });
+        expect(confirm()).toBeEnabled();
+        fireEvent.change(field(/oauth\.client_secret/), { target: { value: '' } });
+        expect(confirm()).toBeDisabled();
+      });
+
+      it('writes the typed values, never the mask', async () => {
+        renderDialog(undefined, undefined, { entry: secretEntry });
+        fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+        fireEvent.change(await screen.findByLabelText(/oauth\.client_secret/), {
+          target: { value: 'sec1' },
+        });
+        fireEvent.change(field(/apiKey\.key/), { target: { value: 'sec2' } });
+        await waitFor(() => expect(confirm()).toBeEnabled());
+        await clickConfirm();
+        await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+        const ops = sentOps();
+        expect(ops).toContainEqual({
+          op: 'set',
+          path: 'mcpServers.Notes.oauth.client_secret',
+          value: 'sec1',
+        });
+        expect(ops).toContainEqual({
+          op: 'set',
+          path: 'mcpServers.Notes.apiKey.key',
+          value: 'sec2',
+        });
+        expect(JSON.stringify(ops)).not.toContain('********');
+      });
+
+      it('shows no secret input for an entry without secrets', async () => {
+        renderDialog();
+        fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+        await waitFor(() => expect(confirm()).toBeEnabled());
+        expect(document.querySelector('input[type="password"]')).toBeNull();
+      });
+    });
+
+    it('shows a planner throw in the alert and writes nothing', async () => {
+      const dotted = { ...entry, key: 'No.tes' };
+      renderDialog(undefined, undefined, { entry: dotted });
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      await clickConfirm();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/has a dot/);
+      expect(applyMock).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('results of a move', () => {
+    const move = (source: t.WriteTarget = { type: 'base' }) =>
+      renderDialog(source, undefined, { mode: 'move' });
+    const fail = { ...ok(), applied: 0, failed: [{ path: 'mcpServers.Notes', message: 'boom' }] };
+
+    it('shows the removal and no kept line once the original is removed', async () => {
+      move();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Move' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      const row = await screen.findByRole('link', { name: /Original in Base configuration/ });
+      expect(row).toBeVisible();
+      expect(applyMock).toHaveBeenCalledTimes(2);
+      expect(screen.queryByTestId('transfer-kept')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    it('says the original was kept, and shows no removal, when a copy failed', async () => {
+      applyMock.mockResolvedValueOnce(fail);
+      move();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Move' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      expect(await screen.findByTestId('transfer-kept')).toHaveTextContent('The original was kept');
+      expect(screen.queryByText(/Original in/)).not.toBeInTheDocument();
+      expect(applyMock).toHaveBeenCalledTimes(1);
+    });
+
+    it('offers Retry for a failed removal, and a retry that saves clears the kept line', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(fail);
+      move();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Move' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      expect(await screen.findByTestId('transfer-kept')).toBeVisible();
+      expect(screen.getByText(/Original in Base configuration/)).toBeVisible();
+      applyMock.mockResolvedValue(ok());
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(screen.queryByTestId('transfer-kept')).not.toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    it('offers Retry for a stale removal', async () => {
+      applyMock
+        .mockResolvedValueOnce(ok())
+        .mockResolvedValueOnce({ ...ok(), applied: 0, conflict: true });
+      move();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Move' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      expect(await screen.findByText(/Original in Base configuration/)).toBeVisible();
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled());
+    });
+
+    it('shows no kept line for a copy', async () => {
+      applyMock.mockResolvedValueOnce(fail);
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      await clickConfirm();
+      await screen.findByText(/boom/);
+      expect(screen.queryByTestId('transfer-kept')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows a skip reason as words, not as its code', async () => {
+    applyMock.mockResolvedValueOnce({
+      ...ok(),
+      applied: 0,
+      skipped: [{ fieldPath: 'mcpServers.Notes', reason: 'notStored' }],
+    });
+    renderDialog();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+    await waitFor(() => expect(confirm()).toBeEnabled());
+    await clickConfirm();
+    const row = await screen.findByTestId('transfer-result');
+    expect(row).toHaveTextContent('LibreChat did not store it; configure it in librechat.yaml');
+    expect(row).not.toHaveTextContent('notStored');
+  });
+
+  it('still shows a message that is not a skip reason as it is', async () => {
+    applyMock.mockResolvedValueOnce({
+      ...ok(),
+      applied: 0,
+      failed: [{ path: 'mcpServers.constructor', message: 'constructor' }],
+    });
+    renderDialog();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+    await waitFor(() => expect(confirm()).toBeEnabled());
+    await clickConfirm();
+    expect(await screen.findByTestId('transfer-result')).toHaveTextContent(
+      'Not saved: constructor',
+    );
   });
 });

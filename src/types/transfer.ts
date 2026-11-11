@@ -18,6 +18,7 @@ export interface TransferTargetInput {
   shownKeys: ReadonlySet<string>;
   clash?: ClashChoice;
 }
+export type TransferNames = Pick<TransferTargetInput, 'ownKeys' | 'shownKeys'>;
 export interface TransferStep {
   target: WriteTarget;
   key: string;

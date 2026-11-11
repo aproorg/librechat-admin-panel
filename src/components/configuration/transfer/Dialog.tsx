@@ -1,19 +1,26 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
-import { useQuery } from '@tanstack/react-query';
-import { Button, Checkbox, Dialog } from '@clickhouse/click-ui';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { Button, Checkbox, Dialog, PasswordField, RadioGroup } from '@clickhouse/click-ui';
 import type * as t from '@/types';
-import { availableScopesOptions } from '@/server';
+import { SKIP_REASON_KEYS } from '@/constants';
+import { availableScopesOptions, baseConfigOptions } from '@/server';
 import {
   useLocalize,
   useReturnFocus,
   useCapabilities,
   useEntryTransfer,
   importTargetLabel,
+  scopeConfigOptions,
 } from '@/hooks';
 import {
   cn,
   planCopy,
+  entriesByKey,
+  isConfigRecord,
+  mergeScopeLayer,
+  getValueAtPath,
+  getKeyedCollection,
   formatScopeParam,
   transferTargets,
   hasConfigCapability,
@@ -53,10 +60,63 @@ function PlacesSkeleton() {
   );
 }
 
-function ResultRow({ result }: { result: t.TransferResult }) {
+const CLASH_CHOICES: readonly t.ClashChoice[] = ['replace', 'keepBoth', 'skip'];
+const CLASH_KEYS: Readonly<Record<t.ClashChoice, string>> = {
+  replace: 'com_config_transfer_clash_replace',
+  keepBoth: 'com_config_transfer_clash_keep_both',
+  skip: 'com_config_transfer_clash_skip',
+};
+
+function namesAt(layer: t.ConfigValue, entry: t.TransferEntry): Set<string> {
+  const list = getValueAtPath(layer, entry.path);
+  const collection = getKeyedCollection(entry.path);
+  if (collection) return new Set(entriesByKey(list, collection.key).keys());
+  return new Set(isConfigRecord(list) ? Object.keys(list) : []);
+}
+
+function namesOf(
+  entry: t.TransferEntry,
+  base: t.BaseConfigData,
+  scope: t.ResolvedConfigData | undefined,
+): t.TransferNames {
+  if (!scope) {
+    return {
+      ownKeys: namesAt(base.dbOverrides ?? {}, entry),
+      shownKeys: namesAt(base.config, entry),
+    };
+  }
+  const shown = mergeScopeLayer(base.config, scope.overrides, scope.tombstones);
+  return { ownKeys: namesAt(scope.overrides, entry), shownKeys: namesAt(shown, entry) };
+}
+
+/** The names each ticked target holds and shows, by key; a target whose layers are still loading has none. */
+function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry) {
+  const base = useQuery({ ...baseConfigOptions, enabled: chosen.length > 0 });
+  const scoped = useQueries({
+    queries: chosen.map((target) =>
+      scopeConfigOptions(target.type === 'scope' ? target.scope : null),
+    ),
+  });
+  const names = new Map<string, t.TransferNames>();
+  chosen.forEach((target, i) => {
+    if (!base.data) return;
+    const scope = scoped[i]?.data;
+    if (target.type === 'scope' && !scope) return;
+    names.set(keyOf(target), namesOf(entry, base.data, scope));
+  });
+  return { names, loading: chosen.some((target) => !names.has(keyOf(target))) };
+}
+
+function describe(message: string, localize: t.LocalizeFn): string {
+  return Object.hasOwn(SKIP_REASON_KEYS, message)
+    ? localize(SKIP_REASON_KEYS[message as t.SkipReason])
+    : message;
+}
+
+function ResultRow({ result, label: heading }: { result: t.TransferResult; label?: string }) {
   const localize = useLocalize();
   const { target, status, message } = result;
-  const label = labelOf(target, localize);
+  const label = heading ?? labelOf(target, localize);
   const scope = target.type === 'base' ? undefined : formatScopeParam(target.scope);
   return (
     <li data-testid="transfer-result" className="flex flex-col gap-0.5 py-1 text-sm">
@@ -69,7 +129,7 @@ function ResultRow({ result }: { result: t.TransferResult }) {
       )}
       <span className="text-xs wrap-anywhere text-(--cui-color-text-muted)">
         {localize(STATUS_KEYS[status])}
-        {message ? `: ${message}` : ''}
+        {message ? `: ${describe(message, localize)}` : ''}
       </span>
     </li>
   );
@@ -148,6 +208,61 @@ function Picker(props: PickerProps) {
   );
 }
 
+interface OptionsProps {
+  entry: t.TransferEntry;
+  clashing: t.WriteTarget[];
+  choices: Readonly<Record<string, t.ClashChoice>>;
+  secrets: Readonly<Record<string, string>>;
+  loading: boolean;
+  onChoose: (key: string, choice: t.ClashChoice) => void;
+  onSecret: (path: string, value: string) => void;
+}
+
+function Options({ entry, clashing, choices, secrets, loading, onChoose, onSecret }: OptionsProps) {
+  const localize = useLocalize();
+  return (
+    <>
+      {loading && (
+        <p className="m-0 text-xs text-(--cui-color-text-muted)">
+          {localize('com_config_transfer_names_loading')}
+        </p>
+      )}
+      {clashing.map((target) => {
+        const label = localize('com_config_transfer_clash', {
+          name: entry.key,
+          place: labelOf(target, localize),
+        });
+        return (
+          <RadioGroup
+            key={keyOf(target)}
+            label={label}
+            aria-label={label}
+            value={choices[keyOf(target)] ?? ''}
+            onValueChange={(choice) => onChoose(keyOf(target), choice as t.ClashChoice)}
+          >
+            {CLASH_CHOICES.map((choice) => (
+              <RadioGroup.Item
+                key={choice}
+                value={choice}
+                id={`transfer-clash-${keyOf(target)}-${choice}`}
+                label={localize(CLASH_KEYS[choice])}
+              />
+            ))}
+          </RadioGroup>
+        );
+      })}
+      {entry.secrets.map((path) => (
+        <PasswordField
+          key={path}
+          label={localize('com_config_transfer_secret', { path })}
+          value={secrets[path] ?? ''}
+          onChange={(value) => onSecret(path, value)}
+        />
+      ))}
+    </>
+  );
+}
+
 function useTicks(targets: t.WriteTarget[]) {
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
   const chosen = targets.filter((target) => ticked.has(keyOf(target)));
@@ -217,29 +332,49 @@ function Footer(props: FooterProps) {
 }
 
 function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogProps, 'open'>) {
+  const localize = useLocalize();
   const { hasCapability } = useCapabilities();
   const query = useQuery(availableScopesOptions);
   const { data: scopes = EMPTY_SCOPES, isPending, isError } = query;
   const transfer = useEntryTransfer({ source });
   const [error, setError] = useState<string>();
+  const [choices, setChoices] = useState<Readonly<Record<string, t.ClashChoice>>>({});
+  const [secrets, setSecrets] = useState<Readonly<Record<string, string>>>({});
 
   const canWrite = hasConfigCapability(hasCapability, null, 'manage');
   const targets = transferTargets(canWrite ? scopes : EMPTY_SCOPES, source, canWrite);
   const { ticked, chosen, toggle } = useTicks(targets);
+  const { names, loading } = useTargetNames(chosen, entry);
+  const clashing = chosen.filter((target) => names.get(keyOf(target))?.ownKeys.has(entry.key));
+  const choiceOf = (target: t.WriteTarget) => choices[keyOf(target)];
+  const secretsTyped = entry.secrets.every((path) => (secrets[path] ?? '') !== '');
   const started = transfer.results.length > 0;
-  const canRetry = transfer.results.some(({ status }) => status === 'failed' || status === 'stale');
+  const { removal } = transfer;
+  const retryable = (result: t.TransferResult | null) =>
+    result?.status === 'failed' || result?.status === 'stale';
+  const canRetry = transfer.results.some(retryable) || retryable(removal);
+  const canConfirm =
+    chosen.length > 0 && !loading && secretsTyped && clashing.every((target) => choiceOf(target));
+
+  const onToggle = (key: string, checked: boolean) => {
+    toggle(key, checked);
+    if (!checked) setChoices(({ [key]: _dropped, ...rest }) => rest);
+  };
 
   const confirm = async () => {
     setError(undefined);
     try {
-      const steps = chosen.map((target) =>
-        planCopy(entry, { target, ownKeys: new Set(), shownKeys: new Set() }, {}),
-      );
-      await transfer.run(
-        mode,
-        entry,
-        steps.filter((step): step is t.TransferStep => step !== null),
-      );
+      const steps = chosen
+        .map((target) =>
+          planCopy(
+            entry,
+            { ...names.get(keyOf(target))!, target, clash: choiceOf(target) },
+            secrets,
+          ),
+        )
+        .filter((step): step is t.TransferStep => step !== null);
+      if (steps.length === 0) return onClose();
+      await transfer.run(mode, entry, steps);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -249,23 +384,51 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
     <div className="form-dialog-form">
       <div className="form-dialog-body gap-4!">
         {started ? (
-          <ul className="m-0 flex list-none flex-col p-0" aria-live="polite">
-            {transfer.results.map((result) => (
-              <ResultRow key={keyOf(result.target)} result={result} />
-            ))}
-          </ul>
+          <>
+            <ul className="m-0 flex list-none flex-col p-0" aria-live="polite">
+              {transfer.results.map((result) => (
+                <ResultRow key={keyOf(result.target)} result={result} />
+              ))}
+              {removal && (
+                <ResultRow
+                  result={removal}
+                  label={localize('com_config_transfer_original', {
+                    place: labelOf(source, localize),
+                  })}
+                />
+              )}
+            </ul>
+            {transfer.originalKept && (
+              <p data-testid="transfer-kept" className="m-0 text-sm">
+                {localize('com_config_transfer_kept')}
+              </p>
+            )}
+          </>
         ) : (
-          <Picker
-            mode={mode}
-            entry={entry}
-            loading={isPending}
-            failed={isError && query.data === undefined}
-            targets={targets}
-            ticked={ticked}
-            chosen={chosen}
-            onReload={() => void query.refetch()}
-            onToggle={toggle}
-          />
+          <>
+            <Picker
+              mode={mode}
+              entry={entry}
+              loading={isPending}
+              failed={isError && query.data === undefined}
+              targets={targets}
+              ticked={ticked}
+              chosen={chosen}
+              onReload={() => void query.refetch()}
+              onToggle={onToggle}
+            />
+            {chosen.length > 0 && (
+              <Options
+                entry={entry}
+                clashing={clashing}
+                choices={choices}
+                secrets={secrets}
+                loading={loading}
+                onChoose={(key, choice) => setChoices((prev) => ({ ...prev, [key]: choice }))}
+                onSecret={(path, value) => setSecrets((prev) => ({ ...prev, [path]: value }))}
+              />
+            )}
+          </>
         )}
       </div>
 
@@ -274,7 +437,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
         started={started}
         canRetry={canRetry}
         running={transfer.running}
-        canConfirm={chosen.length > 0}
+        canConfirm={canConfirm}
         mode={mode}
         onClose={onClose}
         onConfirm={() => void confirm()}
