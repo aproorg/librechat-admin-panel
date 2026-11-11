@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect, useId } from 'react';
 import type * as t from '@/types';
 import { useLocalize, useValuesScope, useConfigKeyProblem, useExpandableState } from '@/hooks';
 import { DecorativeIcon, StateChip } from '@/components/shared';
+import type { EntryTransferAction } from './transfer';
 import { getEntrySummary } from './entries';
 import { sourceLabel } from '../values';
 import { CodeField } from './CodeField';
@@ -52,7 +53,8 @@ export function ObjectEntryCard({
   defaultExpanded = false,
   renderFields,
   editSessionId,
-}: t.ObjectEntryCardProps) {
+  transferActions,
+}: t.ObjectEntryCardProps & { transferActions?: EntryTransferAction[] }) {
   const localize = useLocalize();
   const unsafeKeyProblem = useConfigKeyProblem();
   const generatedId = useId();
@@ -381,6 +383,19 @@ export function ObjectEntryCard({
             <DecorativeIcon name="arrow-down" size="sm" />
           </button>
         )}
+        {transferActions?.map((action) => (
+          <button
+            key={action.id}
+            type="button"
+            onClick={action.onSelect}
+            disabled={action.disabled}
+            className={ACTION_CLASSES}
+            aria-label={action.label}
+            title={action.reason ?? action.label}
+          >
+            <DecorativeIcon name={action.id === 'copy' ? 'copy' : 'arrow-right'} size="sm" />
+          </button>
+        ))}
         {!disabled && lockedNote && (
           <span
             className={cn(ACTION_CLASSES, 'cursor-default hover:bg-transparent')}

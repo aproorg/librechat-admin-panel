@@ -5,7 +5,8 @@ import { RowFilterContext } from '@/contexts/RowFilterContext';
 import { getEntryIdentity, getEntryTitle } from './entries';
 import { AddItemButton } from '@/components/shared';
 import { ObjectEntryCard } from './ObjectEntryCard';
-import { isRowVisible } from '@/utils';
+import { useEntryTransfer } from './transfer';
+import { getEntryKey, getKeyedCollection, isRowVisible } from '@/utils';
 
 /**
  * List of object entries as cards. Add appends an entry and expands, scrolls
@@ -38,6 +39,8 @@ export function ArrayObjectField({
   const localize = useLocalize();
   const rowFilter = useContext(RowFilterContext);
   const markersOf = useEntryMarkers(path);
+  const transfer = useEntryTransfer(path);
+  const identityKey = path ? getKeyedCollection(path)?.key : undefined;
   const items = Array.isArray(value) ? value : [];
   /** Card ids the table of contents and deep links target (`section-endpoints-custom-3`). */
   const entryCardId = (index: number): string | undefined => {
@@ -260,9 +263,15 @@ export function ArrayObjectField({
             defaultExpanded={newKeys.has(key)}
             renderFields={renderFields}
             editSessionId={editSessionId}
+            transferActions={
+              identityKey && getEntryKey(item, identityKey)
+                ? transfer.actionsFor(getEntryKey(item, identityKey) ?? '', item, disabled)
+                : undefined
+            }
           />
         );
       })}
+      {transfer.dialog}
       {items.length === 0 && removed.length === 0 && (
         <p className="m-0 py-2 text-sm text-(--cui-color-text-muted)">
           {emptyLabel ?? localize('com_config_no_entries')}

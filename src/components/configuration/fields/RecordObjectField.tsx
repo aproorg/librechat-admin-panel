@@ -6,6 +6,7 @@ import { RowFilterContext } from '@/contexts/RowFilterContext';
 import { useLocalize, useConfigKeyProblem } from '@/hooks';
 import { AddItemButton } from '@/components/shared';
 import { ObjectEntryCard } from './ObjectEntryCard';
+import { useEntryTransfer } from './transfer';
 import { cn, isRowVisible } from '@/utils';
 import { INPUT_CLASSES } from './display';
 
@@ -51,6 +52,7 @@ export function RecordObjectField({
   const unsafeKeyProblem = useConfigKeyProblem();
   const keyListId = keyOptions ? `${id}-keys` : undefined;
   const rowFilter = useContext(RowFilterContext);
+  const transfer = useEntryTransfer(path);
   const [showAddInput, setShowAddInput] = useState(false);
   const [newKeys, setNewKeys] = useState<ReadonlySet<string>>(() => new Set());
   const [removed, setRemoved] = useState<Array<t.PendingRemoval<string>>>([]);
@@ -173,9 +175,11 @@ export function RecordObjectField({
             defaultExpanded={newKeys.has(key)}
             renderFields={renderFields}
             editSessionId={editSessionId}
+            transferActions={transfer.actionsFor(key, entryValue, disabled)}
           />
         );
       })}
+      {transfer.dialog}
       {entries.length === 0 && removed.length === 0 && !showAddInput && (
         <p className="m-0 py-2 text-sm text-(--cui-color-text-muted)">
           {localize('com_config_no_entries')}
