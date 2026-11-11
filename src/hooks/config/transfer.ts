@@ -1,8 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query';
 import { useState, useCallback, useRef } from 'react';
+import type { QueryClient } from '@tanstack/react-query';
 import type * as t from '@/types';
+import { applyConfigChangesFn, getBaseConfigFn, getResolvedConfigFn } from '@/server';
+import { planRemoval, toRevisionPrecondition } from '@/utils';
 import { RESOLVED_READ_QUERY_KEYS } from '@/constants';
-import { applyConfigChangesFn } from '@/server';
 
 function toTargetRef(target: t.WriteTarget): t.WriteTargetRef {
   if (target.type === 'base') return { type: 'base' };
@@ -18,9 +20,36 @@ function readKeys(target: t.WriteTarget): ReadonlyArray<readonly string[]> {
     : [['resolvedConfig'], ['availableScopes'], ...RESOLVED_READ_QUERY_KEYS];
 }
 
-/** The status of one step's save: a conflict is stale, any issue or failed write is failed with its message. */
-function toResult(step: t.TransferStep, outcome: t.ApplyConfigChangesResult): t.TransferResult {
-  const { target, key } = step;
+/** A target's stored revision: the one already loaded, or with `fresh` one read now. */
+async function readRevision(
+  client: QueryClient,
+  target: t.WriteTarget,
+  fresh: boolean,
+): Promise<string | undefined> {
+  const staleTime = fresh ? 0 : Infinity;
+  if (target.type === 'base') {
+    const base = await client.fetchQuery({
+      queryKey: ['baseConfig'],
+      queryFn: () => getBaseConfigFn(),
+      staleTime,
+    });
+    return toRevisionPrecondition(base.dbRevision);
+  }
+  const { principalType, principalId } = target.scope;
+  const doc = await client.fetchQuery({
+    queryKey: ['resolvedConfig', principalType, principalId],
+    queryFn: () => getResolvedConfigFn({ data: { principalType, principalId } }),
+    staleTime,
+  });
+  return toRevisionPrecondition(doc.revision);
+}
+
+/** The status of one save: a conflict is stale, any issue or failed write is failed with its message. */
+function toResult(
+  target: t.WriteTarget,
+  key: string,
+  outcome: t.ApplyConfigChangesResult,
+): t.TransferResult {
   if (outcome.conflict) return { target, key, status: 'stale' };
   const [problem] = [...outcome.issues, ...outcome.failed];
   if (problem) return { target, key, status: 'failed', message: problem.message };
@@ -34,106 +63,151 @@ function toPending({ target, key }: t.TransferStep): t.TransferResult {
   return { target, key, status: 'pending' };
 }
 
-function toThrownResult(step: t.TransferStep, err: unknown): t.TransferResult {
+function toThrownResult(target: t.WriteTarget, key: string, err: unknown): t.TransferResult {
   const message = err instanceof Error ? err.message : String(err);
-  return { target: step.target, key: step.key, status: 'failed', message };
+  return { target, key, status: 'failed', message };
 }
 
-async function saveStep(step: t.TransferStep): Promise<t.TransferResult> {
+async function save(
+  client: QueryClient,
+  target: t.WriteTarget,
+  key: string,
+  ops: t.ConfigChange[],
+  fresh: boolean,
+): Promise<t.TransferResult> {
+  if (ops.length === 0) return { target, key, status: 'skipped' };
   try {
+    const expectedRevision = await readRevision(client, target, fresh);
     const outcome = await applyConfigChangesFn({
-      data: { target: toTargetRef(step.target), ops: step.ops },
+      data: { target: toTargetRef(target), ops, expectedRevision },
     });
-    return toResult(step, outcome);
+    return toResult(target, key, outcome);
   } catch (err) {
-    return toThrownResult(step, err);
+    return toThrownResult(target, key, err);
   }
 }
 
-function uniqueReadKeys(steps: t.TransferStep[]): Array<readonly string[]> {
+function uniqueReadKeys(targets: t.WriteTarget[]): Array<readonly string[]> {
   const keys = new Map<string, readonly string[]>();
-  steps.flatMap(({ target }) => readKeys(target)).forEach((key) => keys.set(key.join('/'), key));
+  targets.flatMap(readKeys).forEach((key) => keys.set(key.join('/'), key));
   return [...keys.values()];
 }
 
-function keepsOriginal(mode: t.TransferMode, results: t.TransferResult[]): boolean {
-  return (
-    mode === 'move' && results.some(({ status }) => status !== 'saved' && status !== 'skipped')
-  );
+/** Every non-skipped copy is saved, and at least one was written: only then may the original go. */
+function copiesComplete(results: t.TransferResult[]): boolean {
+  const attempted = results.filter(({ status }) => status !== 'skipped');
+  return attempted.length > 0 && attempted.every(({ status }) => status === 'saved');
 }
 
 interface EntryTransferState {
   run(mode: t.TransferMode, entry: t.TransferEntry, steps: t.TransferStep[]): Promise<void>;
   retry(): Promise<void>;
   results: t.TransferResult[];
+  /** The removal of the original after a move: null until every copy is saved. */
+  removal: t.TransferResult | null;
   running: boolean;
   originalKept: boolean;
+}
+
+interface Transfer {
+  mode: t.TransferMode;
+  entry: t.TransferEntry;
+  steps: t.TransferStep[];
+  results: t.TransferResult[];
+  removal: t.TransferResult | null;
+}
+
+interface Publish {
+  results(results: t.TransferResult[]): void;
+  removal(removal: t.TransferResult): void;
+}
+
+/** Saves `steps`, then for a move the removal once every copy is saved; `fresh` reads each target's revision anew. Returns the targets written to. */
+async function writeTransfer(
+  client: QueryClient,
+  source: t.WriteTarget,
+  transfer: Transfer,
+  steps: t.TransferStep[],
+  fresh: boolean,
+  publish: Publish,
+): Promise<t.WriteTarget[]> {
+  for (const step of steps) {
+    const { target, key, ops } = step;
+    const next = [...transfer.results];
+    next[transfer.steps.indexOf(step)] = await save(client, target, key, ops, fresh);
+    transfer.results = next;
+    publish.results(next);
+  }
+  const { mode, entry, removal } = transfer;
+  const written = steps.map(({ target }) => target);
+  const removable = mode === 'move' && copiesComplete(transfer.results);
+  if (!removable || removal?.status === 'saved') return written;
+  transfer.removal = await save(client, source, entry.key, planRemoval(entry), fresh);
+  publish.removal(transfer.removal);
+  return [...written, source];
 }
 
 /**
  * Writes an entry to each target, one save per step, and reports one result
  * per step. Nothing is saved until `run`; a step that fails does not stop the
- * others, and `retry` re-runs only the failed and stale ones.
+ * others, and `retry` re-runs only the failed and stale ones against the
+ * target as it is now. A move removes the original from `source` once every
+ * copy is saved, and never before.
  */
-export function useEntryTransfer(_options: { source: t.WriteTarget }): EntryTransferState {
+export function useEntryTransfer(options: { source: t.WriteTarget }): EntryTransferState {
+  const { source } = options;
   const queryClient = useQueryClient();
   const [results, setResults] = useState<t.TransferResult[]>([]);
+  const [removal, setRemoval] = useState<t.TransferResult | null>(null);
   const [running, setRunning] = useState(false);
   const [mode, setMode] = useState<t.TransferMode>('copy');
-  const stepsRef = useRef<t.TransferStep[]>([]);
-  const resultsRef = useRef<t.TransferResult[]>([]);
+  const transferRef = useRef<Transfer | null>(null);
   const busyRef = useRef(false);
 
-  const refresh = useCallback(
-    (steps: t.TransferStep[]) => {
-      return Promise.all(
-        uniqueReadKeys(steps).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
-      );
-    },
-    [queryClient],
-  );
-
-  const runSteps = useCallback(
-    async (steps: t.TransferStep[], previous: t.TransferResult[]) => {
+  const execute = useCallback(
+    async (transfer: Transfer, steps: t.TransferStep[], fresh: boolean) => {
       busyRef.current = true;
       setRunning(true);
+      const publish: Publish = { results: setResults, removal: setRemoval };
+      let touched: t.WriteTarget[] = steps.map(({ target }) => target);
       try {
-        const next = [...previous];
-        for (const step of steps) {
-          const index = stepsRef.current.indexOf(step);
-          next[index] = await saveStep(step);
-          resultsRef.current = [...next];
-          setResults(resultsRef.current);
-        }
-        await refresh(steps);
+        touched = await writeTransfer(queryClient, source, transfer, steps, fresh, publish);
       } finally {
+        await Promise.all(
+          uniqueReadKeys(touched).map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+        );
         busyRef.current = false;
         setRunning(false);
       }
     },
-    [refresh],
+    [queryClient, source],
   );
 
   const run = useCallback<EntryTransferState['run']>(
-    async (nextMode, _entry, steps) => {
+    async (nextMode, entry, steps) => {
       if (busyRef.current) return;
       busyRef.current = true;
-      stepsRef.current = steps;
-      setMode(nextMode);
       const pending = steps.map(toPending);
-      resultsRef.current = pending;
+      const transfer: Transfer = { mode: nextMode, entry, steps, results: pending, removal: null };
+      transferRef.current = transfer;
+      setMode(nextMode);
+      setRemoval(null);
       setResults(pending);
-      await runSteps(steps, pending);
+      await execute(transfer, steps, false);
     },
-    [runSteps],
+    [execute],
   );
 
   const retry = useCallback(async () => {
-    if (busyRef.current) return;
-    const failed = stepsRef.current.filter((_, i) => RETRYABLE.has(resultsRef.current[i]?.status));
-    if (failed.length === 0) return;
-    await runSteps(failed, resultsRef.current);
-  }, [runSteps]);
+    const transfer = transferRef.current;
+    if (busyRef.current || !transfer) return;
+    const failed = transfer.steps.filter((_, i) => RETRYABLE.has(transfer.results[i]?.status));
+    const removalFailed = transfer.removal !== null && transfer.removal.status !== 'saved';
+    if (failed.length === 0 && !removalFailed) return;
+    await execute(transfer, failed, true);
+  }, [execute]);
 
-  return { run, retry, results, running, originalKept: keepsOriginal(mode, results) };
+  const originalKept =
+    mode === 'move' && results.length > 0 && !running && removal?.status !== 'saved';
+  return { run, retry, results, removal, running, originalKept };
 }

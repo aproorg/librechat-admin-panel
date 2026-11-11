@@ -4,12 +4,26 @@ import { PrincipalType } from 'librechat-data-provider';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type * as t from '@/types';
-import { applyConfigChangesFn } from '@/server';
+import { applyConfigChangesFn, getBaseConfigFn, getResolvedConfigFn } from '@/server';
 import { useEntryTransfer } from './transfer';
 
-vi.mock('@/server', () => ({ applyConfigChangesFn: vi.fn() }));
+vi.mock('@/server', () => ({
+  applyConfigChangesFn: vi.fn(),
+  getBaseConfigFn: vi.fn(),
+  getResolvedConfigFn: vi.fn(),
+}));
 
 const applyMock = vi.mocked(applyConfigChangesFn);
+const baseMock = vi.mocked(getBaseConfigFn);
+const resolvedMock = vi.mocked(getResolvedConfigFn);
+const baseDoc = (dbRevision: string | null) => ({ dbRevision }) as t.BaseConfigData;
+const scopeDoc = (revision: string | null | undefined): t.ResolvedConfigData => ({
+  resolvedConfig: {},
+  changedPaths: [],
+  overrides: {},
+  tombstones: [],
+  revision,
+});
 const source: t.WriteTarget = { type: 'base' };
 const group = {
   principalType: PrincipalType.GROUP,
@@ -53,20 +67,26 @@ const ok = (): t.ApplyConfigChangesResult => ({
   reported: [],
 });
 
-function setup() {
+function setup(options: { source?: t.WriteTarget } = {}) {
   const client = new QueryClient();
   const invalidate = vi.spyOn(client, 'invalidateQueries');
   const wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
-  const view = renderHook(() => useEntryTransfer({ source }), { wrapper });
-  return { ...view, invalidate };
+  const view = renderHook(() => useEntryTransfer({ source: options.source ?? source }), {
+    wrapper,
+  });
+  return { ...view, invalidate, client };
 }
 
 const invalidatedKeys = (invalidate: ReturnType<typeof setup>['invalidate']) =>
   invalidate.mock.calls.map(([filters]) => filters?.queryKey?.[0]);
 
-beforeEach(() => applyMock.mockReset());
+beforeEach(() => {
+  applyMock.mockReset();
+  baseMock.mockReset().mockResolvedValue(baseDoc('base-rev'));
+  resolvedMock.mockReset().mockResolvedValue(scopeDoc('scope-rev'));
+});
 
 describe('useEntryTransfer', () => {
   it('makes no save before run', () => {
@@ -84,7 +104,7 @@ describe('useEntryTransfer', () => {
     expect(applyMock.mock.calls[0][0].data).toEqual({
       target: { type: 'scope', scope: { principalType: PrincipalType.GROUP, principalId: 'g1' } },
       ops: stepFor(toGroup).ops,
-      expectedRevision: undefined,
+      expectedRevision: 'scope-rev',
     });
     expect(applyMock.mock.calls[1][0].data.target).toEqual({
       type: 'scope',
@@ -255,5 +275,328 @@ describe('useEntryTransfer', () => {
     await act(() => result.current.retry());
     expect(applyMock).toHaveBeenCalledTimes(2);
     expect(result.current.results[0].status).toBe('saved');
+  });
+
+  describe('revisions', () => {
+    const conflict = (): t.ApplyConfigChangesResult => ({ ...ok(), applied: 0, conflict: true });
+    const revisionOf = (call: number) => applyMock.mock.calls[call][0].data.expectedRevision;
+
+    it('saves a profile against the revision it was loaded at', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result, client } = setup();
+      client.setQueryData(['resolvedConfig', PrincipalType.GROUP, 'g1'], scopeDoc('loaded-rev'));
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(revisionOf(0)).toBe('loaded-rev');
+      expect(resolvedMock).not.toHaveBeenCalled();
+    });
+
+    it('reads a profile that is not loaded yet before saving to it', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(resolvedMock).toHaveBeenCalledWith({
+        data: { principalType: PrincipalType.GROUP, principalId: 'g1' },
+      });
+      expect(revisionOf(0)).toBe('scope-rev');
+    });
+
+    it('saves base against its own revision', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor({ type: 'base' })]));
+      expect(revisionOf(0)).toBe('base-rev');
+    });
+
+    it('names a missing document as absent', async () => {
+      applyMock.mockResolvedValue(ok());
+      baseMock.mockResolvedValue(baseDoc(null));
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor({ type: 'base' })]));
+      expect(revisionOf(0)).toBe('absent');
+    });
+
+    it('sends no revision when the server reports none', async () => {
+      applyMock.mockResolvedValue(ok());
+      resolvedMock.mockResolvedValue(scopeDoc(undefined));
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(revisionOf(0)).toBeUndefined();
+    });
+
+    it('fails a step whose target cannot be read, without saving to it', async () => {
+      applyMock.mockResolvedValue(ok());
+      resolvedMock.mockRejectedValueOnce(new Error('read failed'));
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup), stepFor(toRole)]));
+      expect(applyMock).toHaveBeenCalledTimes(1);
+      expect(result.current.results[0]).toMatchObject({ status: 'failed', message: 'read failed' });
+      expect(result.current.results[1].status).toBe('saved');
+    });
+
+    it('retries a stale step against the freshly read revision, not the one it failed with', async () => {
+      applyMock.mockResolvedValueOnce(conflict()).mockResolvedValueOnce(ok());
+      resolvedMock
+        .mockResolvedValueOnce(scopeDoc('rev-1'))
+        .mockResolvedValueOnce(scopeDoc('rev-2'));
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(revisionOf(0)).toBe('rev-1');
+      await act(() => result.current.retry());
+      expect(revisionOf(1)).toBe('rev-2');
+      expect(result.current.results[0].status).toBe('saved');
+    });
+
+    it('retries a failed step against the freshly read revision too', async () => {
+      applyMock.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(ok());
+      resolvedMock
+        .mockResolvedValueOnce(scopeDoc('rev-1'))
+        .mockResolvedValueOnce(scopeDoc('rev-2'));
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      await act(() => result.current.retry());
+      expect(revisionOf(1)).toBe('rev-2');
+    });
+
+    it('keeps a step that stays stale stale', async () => {
+      applyMock.mockResolvedValue(conflict());
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      await act(() => result.current.retry());
+      expect(result.current.results[0].status).toBe('stale');
+    });
+  });
+
+  describe('move', () => {
+    const conflict = (): t.ApplyConfigChangesResult => ({ ...ok(), applied: 0, conflict: true });
+    const removalOps = [{ op: 'reset', path: 'mcpServers.Notes' }];
+    const skippedStep: t.TransferStep = { target: toRole, key: 'Notes', ops: [] };
+    const saveCalls = () => applyMock.mock.calls.map(([call]) => call.data);
+    const removalCalls = () => saveCalls().filter(({ ops }) => ops[0].op === 'reset');
+    const third: t.WriteTarget = {
+      type: 'scope',
+      scope: { ...role, principalId: 'r2' } as t.ConfigScope,
+    };
+
+    it('removes the original from the source after every copy is saved, copies first', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup), stepFor(toRole)]));
+      expect(applyMock).toHaveBeenCalledTimes(3);
+      expect(saveCalls()[2]).toMatchObject({ target: { type: 'base' }, ops: removalOps });
+      expect(saveCalls()[0].ops[0].op).toBe('upsertEntry');
+      expect(saveCalls()[1].ops[0].op).toBe('upsertEntry');
+      expect(result.current.originalKept).toBe(false);
+      expect(result.current.removal).toMatchObject({ status: 'saved', key: 'Notes' });
+    });
+
+    it('removes from a profile source, not from base', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup({ source: toRole });
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(saveCalls()[1].target).toEqual({
+        type: 'scope',
+        scope: { principalType: PrincipalType.ROLE, principalId: 'r1' },
+      });
+    });
+
+    it('removes the original on the source revision it was loaded at', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result, client } = setup();
+      client.setQueryData(['baseConfig'], baseDoc('source-rev'));
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(saveCalls()[1].expectedRevision).toBe('source-rev');
+    });
+
+    it('never removes when a copy failed, and says the original was kept', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockRejectedValueOnce(new Error('boom'));
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup), stepFor(toRole)]));
+      expect(removalCalls()).toHaveLength(0);
+      expect(result.current.originalKept).toBe(true);
+      expect(result.current.removal).toBeNull();
+    });
+
+    it('never removes when a copy is stale', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(conflict());
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup), stepFor(toRole)]));
+      expect(removalCalls()).toHaveLength(0);
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('never removes when a copy saved nothing without a problem', async () => {
+      applyMock.mockResolvedValue({ ...ok(), applied: 0 });
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(applyMock).toHaveBeenCalledTimes(1);
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('does not remove after a copy', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('copy', entry, [stepFor(toGroup)]));
+      expect(applyMock).toHaveBeenCalledTimes(1);
+      expect(result.current.removal).toBeNull();
+    });
+
+    it('removes after a retry that completes the copies', async () => {
+      applyMock
+        .mockResolvedValueOnce(ok())
+        .mockRejectedValueOnce(new Error('boom'))
+        .mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup), stepFor(toRole)]));
+      expect(removalCalls()).toHaveLength(0);
+      await act(() => result.current.retry());
+      expect(applyMock).toHaveBeenCalledTimes(4);
+      expect(saveCalls()[2].target).toMatchObject({ scope: { principalId: 'r1' } });
+      expect(saveCalls()[3]).toMatchObject({ target: { type: 'base' }, ops: removalOps });
+      expect(result.current.originalKept).toBe(false);
+    });
+
+    it('does not remove after a retry that saves only some of the failed copies', async () => {
+      applyMock
+        .mockResolvedValueOnce(ok())
+        .mockRejectedValueOnce(new Error('one'))
+        .mockRejectedValueOnce(new Error('two'))
+        .mockResolvedValueOnce(ok())
+        .mockRejectedValueOnce(new Error('still two'))
+        .mockResolvedValue(ok());
+      const { result } = setup();
+      const steps = [stepFor(toGroup), stepFor(toRole), stepFor(third)];
+      await act(() => result.current.run('move', entry, steps));
+      await act(() => result.current.retry());
+      expect(result.current.results.map((r) => r.status)).toEqual(['saved', 'saved', 'failed']);
+      expect(removalCalls()).toHaveLength(0);
+      expect(result.current.originalKept).toBe(true);
+      await act(() => result.current.retry());
+      expect(removalCalls()).toHaveLength(1);
+      expect(result.current.originalKept).toBe(false);
+    });
+
+    it('keeps the original and reports it when the removal throws', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockRejectedValueOnce(new Error('cannot remove'));
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(result.current.results[0].status).toBe('saved');
+      expect(result.current.removal).toMatchObject({ status: 'failed', message: 'cannot remove' });
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('reports a removal that conflicts as stale and keeps the original', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce(conflict());
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(result.current.removal?.status).toBe('stale');
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('reports a removal that wrote nothing as failed and keeps the original', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce({ ...ok(), applied: 0 });
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(result.current.removal?.status).toBe('failed');
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('reports a removal with an issue as failed with its message', async () => {
+      applyMock.mockResolvedValueOnce(ok()).mockResolvedValueOnce({
+        ...ok(),
+        applied: 0,
+        issues: [{ path: 'mcpServers', message: 'no' }],
+      });
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(result.current.removal).toMatchObject({ status: 'failed', message: 'no' });
+    });
+
+    it('retries only the removal when the copies are saved, on the fresh source revision', async () => {
+      applyMock
+        .mockResolvedValueOnce(ok())
+        .mockResolvedValueOnce(conflict())
+        .mockResolvedValueOnce(ok());
+      baseMock.mockResolvedValueOnce(baseDoc('src-1')).mockResolvedValueOnce(baseDoc('src-2'));
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(saveCalls()[1].expectedRevision).toBe('src-1');
+      await act(() => result.current.retry());
+      expect(applyMock).toHaveBeenCalledTimes(3);
+      expect(saveCalls()[2]).toMatchObject({ ops: removalOps, expectedRevision: 'src-2' });
+      expect(result.current.removal?.status).toBe('saved');
+      expect(result.current.originalKept).toBe(false);
+    });
+
+    it('does not remove twice once the removal is saved', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      await act(() => result.current.retry());
+      expect(removalCalls()).toHaveLength(1);
+    });
+
+    it('skips a step with nothing to write, without a save, and still removes', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup), skippedStep]));
+      expect(applyMock).toHaveBeenCalledTimes(2);
+      expect(result.current.results.map((r) => r.status)).toEqual(['saved', 'skipped']);
+      expect(removalCalls()).toHaveLength(1);
+    });
+
+    it('does not remove when a skipped step sits beside a failed one', async () => {
+      applyMock.mockRejectedValueOnce(new Error('boom'));
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup), skippedStep]));
+      expect(result.current.results.map((r) => r.status)).toEqual(['failed', 'skipped']);
+      expect(removalCalls()).toHaveLength(0);
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('does not remove when every step is skipped', async () => {
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, [skippedStep]));
+      expect(applyMock).not.toHaveBeenCalled();
+      expect(result.current.originalKept).toBe(true);
+    });
+
+    it('does nothing for a move with no steps', async () => {
+      const { result } = setup();
+      await act(() => result.current.run('move', entry, []));
+      expect(applyMock).not.toHaveBeenCalled();
+      expect(result.current.results).toEqual([]);
+      expect(result.current.removal).toBeNull();
+    });
+
+    it('ignores run and retry while the removal is in flight', async () => {
+      let release: (value: t.ApplyConfigChangesResult) => void = () => undefined;
+      applyMock.mockResolvedValueOnce(ok());
+      applyMock.mockReturnValueOnce(new Promise((resolve) => (release = resolve)));
+      applyMock.mockResolvedValue(ok());
+      const { result } = setup();
+      let first: Promise<void> = Promise.resolve();
+      await act(async () => {
+        first = result.current.run('move', entry, [stepFor(toGroup)]);
+        await vi.waitFor(() => expect(applyMock).toHaveBeenCalledTimes(2));
+        await result.current.run('move', entry, [stepFor(toGroup)]);
+        await result.current.retry();
+      });
+      expect(applyMock).toHaveBeenCalledTimes(2);
+      expect(result.current.running).toBe(true);
+      await act(async () => {
+        release(ok());
+        await first;
+      });
+      expect(applyMock).toHaveBeenCalledTimes(2);
+      expect(result.current.removal?.status).toBe('saved');
+      expect(result.current.running).toBe(false);
+    });
+
+    it('refreshes the source place after the removal', async () => {
+      applyMock.mockResolvedValue(ok());
+      const { result, invalidate } = setup();
+      await act(() => result.current.run('move', entry, [stepFor(toGroup)]));
+      expect(invalidatedKeys(invalidate)).toContain('baseConfig');
+    });
   });
 });
