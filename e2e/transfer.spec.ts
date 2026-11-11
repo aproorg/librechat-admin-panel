@@ -53,4 +53,20 @@ test.describe('Configuration: copy an MCP server to other places', () => {
     await expect(item).toBeDisabled();
     await expect(item).toHaveAccessibleDescription(HINT);
   });
+
+  test('enables Copy to… again once an edit is put back to its saved value', async ({ page }) => {
+    await page.goto('/configuration?tab=mcp');
+    const entry = page.locator(`[data-mcp-server="${SERVER}"]`);
+    await entry.locator('button[aria-expanded]').first().click();
+    const url = entry.getByRole('textbox').first();
+    await url.fill('https://mcp.example.com/changed');
+    await url.press('Tab');
+    await expect(page.getByRole('region', { name: 'Unsaved changes' })).toBeVisible();
+    await url.fill(COPIED_URL);
+    await url.press('Tab');
+    await expect(page.getByRole('region', { name: 'Unsaved changes' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: `Actions for ${SERVER}` }).click();
+    await expect(page.getByRole('menuitem', { name: 'Copy to…' })).toBeEnabled();
+  });
 });

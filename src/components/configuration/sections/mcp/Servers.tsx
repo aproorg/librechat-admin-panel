@@ -590,7 +590,6 @@ export function McpServersRenderer({
     return overrideNotes.moved(key, { lower: lower[key], before: saved[key], after: value });
   };
 
-  const hasUnsavedEdits = Object.keys(edits).length > 0 || Object.keys(restates).length > 0;
   const transferValue = transferKey === null ? undefined : saved[transferKey];
 
   const actionsFor = (key: string, value: t.ConfigRecord, overrides: number) => {
@@ -636,7 +635,7 @@ export function McpServersRenderer({
     });
     const transferReason = ((): string | undefined => {
       if (isStdio) return localize('com_config_mcp_transport_stdio_desc');
-      return hasUnsavedEdits ? localize('com_config_transfer_unsaved') : undefined;
+      return valuesData?.isDirty === true ? localize('com_config_transfer_unsaved') : undefined;
     })();
     actions.push({
       id: 'duplicate',

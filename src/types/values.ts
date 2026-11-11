@@ -143,6 +143,8 @@ export interface ConfigValuesData {
   layers?: ValueLayers | null;
   /** Pending profile Hide/Unhide by path: a row shows what Save will do. */
   visibilityEdits?: Readonly<Record<string, VisibilityEdit>>;
+  /** The page has unsaved edits (including hides and restates). */
+  isDirty?: boolean;
   /** The server's write rules: which sections it reads only from librechat.yaml. */
   writeRules?: ConfigWriteRules;
   /** How the server applies `endpoints.all` title settings (`block` when absent). */

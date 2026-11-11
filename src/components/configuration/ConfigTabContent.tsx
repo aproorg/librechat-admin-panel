@@ -107,6 +107,7 @@ function TabSettings({
   unknownSettings,
   valueLayers,
   visibilityEdits,
+  isDirty,
   onHideField,
   onUnhideField,
   onRenameEntry,
@@ -188,6 +189,7 @@ function TabSettings({
       isEditingScope,
       layers: valueLayers,
       visibilityEdits,
+      isDirty,
     }),
     [
       configValues,
@@ -200,6 +202,7 @@ function TabSettings({
       isEditingScope,
       valueLayers,
       visibilityEdits,
+      isDirty,
       contract,
     ],
   );

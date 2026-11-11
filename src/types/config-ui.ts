@@ -122,6 +122,8 @@ export interface ConfigTabContentProps {
   valueLayers?: ValueLayers | null;
   /** Pending profile Hide/Unhide, shown on their rows before Save. */
   visibilityEdits?: Readonly<Record<string, VisibilityEdit>>;
+  /** The page has unsaved edits. */
+  isDirty?: boolean;
   /** See `FieldRendererProps.onHideField`. */
   onHideField?: (path: string) => void;
   /** See `FieldRendererProps.onUnhideField`. */

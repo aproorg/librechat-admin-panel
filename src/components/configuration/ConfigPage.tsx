@@ -654,6 +654,7 @@ export function ConfigPage({
                                 filterPaths={filterPaths}
                                 valueLayers={layers.valueLayers}
                                 visibilityEdits={edits.visibilityEdits}
+                                isDirty={isDirty}
                                 onHideField={
                                   permissions.canAssign ? edits.handleHideField : undefined
                                 }
