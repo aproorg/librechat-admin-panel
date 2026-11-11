@@ -4048,6 +4048,7 @@
   "com_config_transfer_places": "Places",
   "com_config_transfer_empty": "No other place you can change",
   "com_config_transfer_limit": "At most {{max}} places",
+  "com_config_transfer_load_error": "Could not load places",
   "com_config_transfer_inactive": "Inactive",
   "com_config_transfer_summary_copy_one": "Copy \"{{name}}\" to {{count}} place: {{targets}}",
   "com_config_transfer_summary_copy_other": "Copy \"{{name}}\" to {{count}} places: {{targets}}",

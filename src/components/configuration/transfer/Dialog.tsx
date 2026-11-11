@@ -79,15 +79,33 @@ interface PickerProps {
   mode: t.TransferMode;
   entry: t.TransferEntry;
   loading: boolean;
+  failed: boolean;
   targets: t.WriteTarget[];
   ticked: ReadonlySet<string>;
+  chosen: t.WriteTarget[];
+  onReload: () => void;
   onToggle: (key: string, checked: boolean) => void;
 }
 
-function Picker({ mode, entry, loading, targets, ticked, onToggle }: PickerProps) {
+function Picker(props: PickerProps) {
+  const { mode, entry, loading, failed, targets, ticked, chosen, onReload, onToggle } = props;
   const localize = useLocalize();
-  const chosen = targets.filter((target) => ticked.has(keyOf(target)));
   if (loading) return <PlacesSkeleton />;
+  if (failed) {
+    return (
+      <div role="alert" className="flex items-center gap-3">
+        <span className="text-sm text-(--cui-color-text-danger)">
+          {localize('com_config_transfer_load_error')}
+        </span>
+        <Button
+          htmlType="button"
+          type="secondary"
+          label={localize('com_ui_retry')}
+          onClick={onReload}
+        />
+      </div>
+    );
+  }
   if (targets.length === 0) {
     return (
       <p className="m-0 text-sm text-(--cui-color-text-muted)">
@@ -112,7 +130,7 @@ function Picker({ mode, entry, loading, targets, ticked, onToggle }: PickerProps
           />
         ))}
       </div>
-      {ticked.size >= MAX_TRANSFER_TARGETS && (
+      {chosen.length >= MAX_TRANSFER_TARGETS && (
         <p className="m-0 text-xs text-(--cui-color-text-muted)">
           {localize('com_config_transfer_limit', { max: MAX_TRANSFER_TARGETS })}
         </p>
@@ -130,15 +148,16 @@ function Picker({ mode, entry, loading, targets, ticked, onToggle }: PickerProps
   );
 }
 
-function useTicks() {
+function useTicks(targets: t.WriteTarget[]) {
   const [ticked, setTicked] = useState<ReadonlySet<string>>(new Set());
+  const chosen = targets.filter((target) => ticked.has(keyOf(target)));
   const toggle = (key: string, checked: boolean) => {
-    const next = new Set(ticked);
+    const next = new Set(chosen.map(keyOf));
     if (!checked) next.delete(key);
     else if (next.size < MAX_TRANSFER_TARGETS) next.add(key);
     setTicked(next);
   };
-  return { ticked, toggle };
+  return { ticked, chosen, toggle };
 }
 
 interface FooterProps {
@@ -199,22 +218,21 @@ function Footer(props: FooterProps) {
 
 function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogProps, 'open'>) {
   const { hasCapability } = useCapabilities();
-  const { data: scopes = EMPTY_SCOPES, isPending } = useQuery(availableScopesOptions);
+  const query = useQuery(availableScopesOptions);
+  const { data: scopes = EMPTY_SCOPES, isPending, isError } = query;
   const transfer = useEntryTransfer({ source });
-  const { ticked, toggle } = useTicks();
   const [error, setError] = useState<string>();
 
   const canWrite = hasConfigCapability(hasCapability, null, 'manage');
   const targets = transferTargets(canWrite ? scopes : EMPTY_SCOPES, source, canWrite);
+  const { ticked, chosen, toggle } = useTicks(targets);
   const started = transfer.results.length > 0;
   const canRetry = transfer.results.some(({ status }) => status === 'failed' || status === 'stale');
 
   const confirm = async () => {
     setError(undefined);
     try {
-      const steps = targets
-        .filter((target) => ticked.has(keyOf(target)))
-        .map((target) => planCopy(entry, { target, ownKeys: new Set(), shownKeys: new Set() }, {}));
+      const steps = chosen.map((target) => planCopy(entry, { target, ownKeys: new Set(), shownKeys: new Set() }, {}));
       await transfer.run(
         mode,
         entry,
@@ -239,8 +257,11 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
             mode={mode}
             entry={entry}
             loading={isPending}
+            failed={isError}
             targets={targets}
             ticked={ticked}
+            chosen={chosen}
+            onReload={() => void query.refetch()}
             onToggle={toggle}
           />
         )}
@@ -251,7 +272,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
         started={started}
         canRetry={canRetry}
         running={transfer.running}
-        canConfirm={ticked.size > 0}
+        canConfirm={chosen.length > 0}
         mode={mode}
         onClose={onClose}
         onConfirm={() => void confirm()}

@@ -2,23 +2,26 @@ import '@/locales/i18n';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PrincipalType } from 'librechat-data-provider';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type * as t from '@/types';
 import { applyConfigChangesFn } from '@/server';
 import { TransferDialog } from '../Dialog';
 
-const scopes = vi.hoisted(() => ({ list: [] as unknown[], pending: false }));
+const scopes = vi.hoisted(() => ({ list: [] as unknown[], pending: false, fail: false, canManage: true }));
 
 vi.mock('@/server', () => ({
   applyConfigChangesFn: vi.fn(),
   availableScopesOptions: {
     queryKey: ['availableScopes'],
-    queryFn: () => (scopes.pending ? new Promise(() => undefined) : Promise.resolve(scopes.list)),
+    queryFn: () => {
+      if (scopes.fail) return Promise.reject(new Error('down'));
+      return scopes.pending ? new Promise(() => undefined) : Promise.resolve(scopes.list);
+    },
   },
 }));
 vi.mock('@/hooks', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/hooks')>()),
-  useCapabilities: () => ({ hasCapability: () => true }),
+  useCapabilities: () => ({ hasCapability: () => scopes.canManage }),
 }));
 vi.mock('@tanstack/react-router', async (importOriginal) =>
   (await import('@/test/router')).routerless(importOriginal),
@@ -54,7 +57,7 @@ function renderDialog(source: t.WriteTarget = { type: 'base' }, onClose = vi.fn(
       <TransferDialog open mode="copy" entry={entry} source={source} onClose={onClose} />
     </QueryClientProvider>,
   );
-  return { onClose };
+  return { onClose, client };
 }
 
 const confirm = () => screen.getByRole('button', { name: 'Copy' });
@@ -62,6 +65,8 @@ const confirm = () => screen.getByRole('button', { name: 'Copy' });
 beforeEach(() => {
   vi.clearAllMocks();
   scopes.pending = false;
+  scopes.fail = false;
+  scopes.canManage = true;
   scopes.list = [profile('a'), profile('b', false)];
   applyMock.mockResolvedValue(ok());
 });
@@ -198,5 +203,56 @@ describe('TransferDialog', () => {
     fireEvent.click(confirm());
     await screen.findByRole('link', { name: /Team a/ });
     expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+  });
+
+  it('drops a ticked place that leaves the list: confirm is disabled again', async () => {
+    const { client } = renderDialog();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+    scopes.list = [profile('b', false)];
+    await act(() => client.invalidateQueries({ queryKey: ['availableScopes'] }));
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: /Team a/ })).toBeNull());
+    expect(confirm()).toBeDisabled();
+  });
+
+  it('does not count a ticked place that left the list toward the limit', async () => {
+    scopes.list = Array.from({ length: 11 }, (_, i) => profile(`p${i}`));
+    const { client } = renderDialog();
+    const boxes = await screen.findAllByRole('checkbox');
+    boxes.slice(0, 10).forEach((box) => fireEvent.click(box));
+    scopes.list = (scopes.list as t.ConfigScope[]).slice(1);
+    await act(() => client.invalidateQueries({ queryKey: ['availableScopes'] }));
+    await waitFor(() => expect(screen.queryByRole('checkbox', { name: /Team p0$/ })).toBeNull());
+    expect(screen.queryByText('At most 10 places')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /Team p10/ }));
+    expect(screen.getByRole('checkbox', { name: /Team p10/ })).toBeChecked();
+  });
+
+  it('shows a load error, not the empty state, when the places fail to load, and Retry reloads', async () => {
+    scopes.fail = true;
+    renderDialog();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not load places');
+    expect(screen.queryByText('No other place you can change')).not.toBeInTheDocument();
+    expect(confirm()).toBeDisabled();
+    scopes.fail = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('checkbox', { name: /Team a/ })).toBeVisible();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('offers Retry for a stale result', async () => {
+    applyMock.mockResolvedValueOnce({ ...ok(), applied: 0, conflict: true });
+    renderDialog();
+    fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+    fireEvent.click(confirm());
+    await screen.findByTestId('transfer-result');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeEnabled();
+  });
+
+  it('offers no place and keeps confirm disabled without the manage capability', async () => {
+    scopes.canManage = false;
+    renderDialog();
+    expect(await screen.findByText('No other place you can change')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox')).not.toBeInTheDocument();
+    expect(confirm()).toBeDisabled();
   });
 });
