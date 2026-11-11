@@ -105,10 +105,10 @@ function namesOf(
 }
 
 /** The names each ticked target holds and shows, by key; a target whose layers are loading or failed has none. */
-function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry) {
+function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry, readsLower: boolean) {
   const rules = useConfigWriteRules();
   const { keyedTombstones } = useConfigFeatures();
-  const base = useQuery({ ...baseConfigOptions, enabled: chosen.length > 0 });
+  const base = useQuery({ ...baseConfigOptions, enabled: chosen.length > 0 || readsLower });
   const scoped = useQueries({
     queries: chosen.map((target) =>
       scopeConfigOptions(target.type === 'scope' ? target.scope : null),
@@ -126,6 +126,7 @@ function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry) {
   const failedQueries = [base, ...scoped].filter((query) => query.isError);
   return {
     names,
+    lowerShows: readsLower && !!base.data && namesAt(base.data.config, entry).has(entry.key),
     failed: chosen.length > 0 && failedQueries.length > 0,
     loading: chosen.some((target) => !names.has(keyOf(target))),
     retry: () => failedQueries.forEach((query) => void query.refetch()),
@@ -385,7 +386,11 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
   const canWrite = hasConfigCapability(hasCapability, null, 'manage');
   const targets = transferTargets(canWrite ? scopes : EMPTY_SCOPES, source, canWrite);
   const { ticked, chosen, toggle } = useTicks(targets);
-  const { names, loading, failed, retry } = useTargetNames(chosen, entry);
+  const { names, lowerShows, loading, failed, retry } = useTargetNames(
+    chosen,
+    entry,
+    mode === 'move' && source.type === 'scope',
+  );
   const clashing = chosen.filter((target) => names.get(keyOf(target))?.ownKeys.has(entry.key));
   const choiceOf = (target: t.WriteTarget) => choices[keyOf(target)];
   const secretsTyped = entry.secrets.every((path) => (secrets[path] ?? '') !== '');
@@ -470,6 +475,11 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
               />
             )}
           </>
+        )}
+        {lowerShows && (
+          <p data-testid="transfer-lower" className="m-0 text-sm wrap-anywhere">
+            {localize('com_config_transfer_lower_shows', { name: entry.key })}
+          </p>
         )}
       </div>
 

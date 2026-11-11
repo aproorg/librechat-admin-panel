@@ -4068,6 +4068,7 @@
   "com_config_transfer_secret": "Type {{path}} again",
   "com_config_transfer_original": "Original in {{place}}",
   "com_config_transfer_kept": "The original was kept",
+  "com_config_transfer_lower_shows": "The {{name}} entry from below will show here again",
   "com_config_transfer_unsaved": "Save your changes first",
   "com_config_transfer_blocked_read_only": "You can't change this place",
   "com_config_transfer_blocked_file": "Defined in librechat.yaml, so it can't be moved",

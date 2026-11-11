@@ -717,6 +717,58 @@ describe('TransferDialog', () => {
     });
   });
 
+  describe('the entry from below showing again', () => {
+    const inBase = { config: { mcpServers: { Notes: { url: 'x' } } }, dbOverrides: {} };
+    const line = /The Notes entry from below will show here again/;
+    const mine = { type: 'scope', scope: profile('a') } as const;
+    const open = async (source: t.WriteTarget, mode: t.TransferMode = 'move') => {
+      renderDialog(source, undefined, { mode });
+      await screen.findAllByRole('checkbox');
+    };
+    const tick = async (name: RegExp) => {
+      fireEvent.click(await screen.findByRole('checkbox', { name }));
+      await waitFor(() => expect(screen.getByRole('button', { name: /Move|Copy/ })).toBeEnabled());
+    };
+
+    it('says so for a move from a profile when the layer below has the name', async () => {
+      scopes.base = inBase;
+      await open(mine);
+      expect(await screen.findByText(line)).toBeVisible();
+      await tick(/Team b/);
+      expect(screen.getByText(line)).toBeVisible();
+    });
+
+    it('says nothing when the layer below does not have the name', async () => {
+      scopes.base = { config: { mcpServers: { Other: { url: 'x' } } }, dbOverrides: {} };
+      await open(mine);
+      await tick(/Team b/);
+      expect(screen.queryByText(/from below will show/)).not.toBeInTheDocument();
+    });
+
+    it('says nothing for a copy', async () => {
+      scopes.base = inBase;
+      await open(mine, 'copy');
+      await tick(/Team b/);
+      expect(screen.queryByText(/from below will show/)).not.toBeInTheDocument();
+    });
+
+    it('says nothing when the open place is Base', async () => {
+      scopes.base = inBase;
+      await open({ type: 'base' });
+      await tick(/Team a/);
+      expect(screen.queryByText(/from below will show/)).not.toBeInTheDocument();
+    });
+
+    it('still says so after the move is saved', async () => {
+      scopes.base = inBase;
+      await open(mine);
+      await tick(/Team b/);
+      fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+      await screen.findByText(/Original in Group: Team a/);
+      expect(screen.getByText(line)).toBeVisible();
+    });
+  });
+
   it('shows a skip reason as words, not as its code', async () => {
     applyMock.mockResolvedValueOnce({
       ...ok(),
