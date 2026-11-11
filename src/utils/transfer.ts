@@ -4,7 +4,7 @@ import { schemaType, unwrapSchema, resolveSubSchema } from './schema';
 import { flattenObject, isConfigRecord, removeValueAtPath, setValueAtPath } from './format';
 import { getKeyedCollection } from './collections';
 import { isSameScope } from './scopes';
-import { MASKED_SECRET } from './secrets';
+import { MASKED_SECRET, secretPreviewPath } from './secrets';
 
 export const MAX_TRANSFER_TARGETS = 10;
 
@@ -70,10 +70,6 @@ function unmasked(value: t.ConfigValue): t.ConfigValue {
   return isConfigRecord(value) ? withoutMask(value) : value;
 }
 
-function previewPath(secret: string): string {
-  return secret.replace(/[^.]+$/, '$&Preview');
-}
-
 function typedSecret(secret: string, secrets: Record<string, string>): string {
   const typed = secrets[secret];
   if (!typed || typed === MASKED_SECRET) {
@@ -122,7 +118,7 @@ export function planCopy(
   ]);
   const hidden = [
     ...entry.secrets,
-    ...entry.secrets.map(previewPath),
+    ...entry.secrets.map(secretPreviewPath),
     ...(collection?.secret ? [collection.secret.preview] : []),
   ];
   const clean = typed.reduce(
@@ -131,12 +127,12 @@ export function planCopy(
   );
   const step = (ops: t.ConfigChange[]): t.TransferStep => ({ target: input.target, key, ops });
   const cleared = input.clash === 'replace' ? planRemoval(entry) : [];
+  const inherited =
+    input.clash !== 'replace' && !input.ownKeys.has(key) && input.shownKeys.has(key);
+  const identity = inherited ? key : null;
   if (collection) {
     const value = { ...clean, [collection.key]: key };
-    return step([
-      ...cleared,
-      { op: 'upsertEntry', path: collection.path, key, identity: null, value },
-    ]);
+    return step([...cleared, { op: 'upsertEntry', path: collection.path, key, identity, value }]);
   }
   assertAddressable(entry.path, key);
   return step([

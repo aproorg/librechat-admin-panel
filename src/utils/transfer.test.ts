@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { PrincipalType } from 'librechat-data-provider';
 import type * as t from '@/types';
 import { MASKED_SECRET } from './secrets';
+import { planConfigChanges } from './changes';
 import {
   transferTargets,
   transferEligibility,
@@ -588,5 +589,116 @@ describe('planCopy secrets', () => {
       secrets: [],
     };
     expect(JSON.stringify(planCopy(entry, input(sales), {}))).not.toContain(MASKED_SECRET);
+  });
+
+  it('writes no preview leaf beside a listed nested record secret', () => {
+    const entry: t.TransferEntry = {
+      path: 'mcpServers',
+      key: 'BC',
+      value: {
+        url: 'u',
+        oauth: { client_secret: MASKED_SECRET, client_secretPreview: 'abc…12' },
+      },
+      secrets: ['oauth.client_secret'],
+    };
+    const ops = planCopy(entry, input(sales), { 'oauth.client_secret': 'typed' })?.ops;
+    expect(JSON.stringify(ops)).not.toContain('client_secretPreview');
+  });
+
+  it('writes no preview leaf of a keyed entry whose secrets list is empty', () => {
+    const entry: t.TransferEntry = {
+      path: 'endpoints.custom',
+      key: 'K',
+      value: { name: 'K', apiKeyPreview: 'sk-…1', baseURL: 'u' },
+      secrets: [],
+    };
+    expect(JSON.stringify(planCopy(entry, input(sales), {})?.ops)).not.toContain('apiKeyPreview');
+  });
+});
+
+describe('planCopy ops through the real write planner', () => {
+  const sales = at(scope('sales'));
+  const copied: t.TransferEntry = {
+    path: 'endpoints.custom',
+    key: 'K',
+    value: {
+      name: 'K',
+      apiKey: 'user_provided',
+      baseURL: 'https://new',
+      models: { default: ['m'] },
+    },
+    secrets: [],
+  };
+  const lowerK = {
+    name: 'K',
+    apiKey: 'user_provided',
+    baseURL: 'https://low',
+    models: { default: ['m'] },
+  };
+  const ownK = { name: 'K', baseURL: 'https://old', headers: { Stale: '1' } };
+  const target = (ownKeys: string[], shownKeys: string[], clash?: t.ClashChoice) => ({
+    target: sales,
+    ownKeys: new Set(ownKeys),
+    shownKeys: new Set(shownKeys),
+    clash,
+  });
+  const plan = (
+    entry: t.TransferEntry,
+    wanted: t.TransferTargetInput,
+    stored: t.ConfigRecord,
+    lower: t.ConfigRecord,
+  ) => {
+    const ops = planCopy(entry, wanted, {})?.ops ?? [];
+    return planConfigChanges(ops, { stored, tombstones: [], lower, lowerKind: 'inherited' });
+  };
+  const custom = (...list: t.ConfigRecord[]): t.ConfigRecord => ({ endpoints: { custom: list } });
+  const ownList = (after: t.ConfigRecord): t.ConfigValue =>
+    (after.endpoints as t.ConfigRecord | undefined)?.custom ?? null;
+
+  it('copies into a place that has no entry of that name', () => {
+    const got = plan(copied, target([], []), {}, {});
+    expect(got.issues).toEqual([]);
+    expect(ownList(got.storedAfter)).toEqual([copied.value]);
+  });
+
+  it('copies over a name the place only inherits, as an override of it', () => {
+    const got = plan(copied, target([], ['K']), {}, custom(lowerK));
+    expect(got.issues).toEqual([]);
+    expect(ownList(got.storedAfter)).toEqual([{ name: 'K', baseURL: 'https://new' }]);
+  });
+
+  it('replaces an own entry the layer below lacks, leaving no stale field', () => {
+    const got = plan(copied, target(['K'], ['K'], 'replace'), custom(ownK), {});
+    expect(got.issues).toEqual([]);
+    expect(ownList(got.storedAfter)).toEqual([copied.value]);
+  });
+
+  it('is refused, not half-applied, when replacing an own entry the layer below also has', () => {
+    const got = plan(copied, target(['K'], ['K'], 'replace'), custom(ownK), custom(lowerK));
+    expect(got.issues.length).toBeGreaterThan(0);
+  });
+
+  it('keeps both next to an own entry under a free name', () => {
+    const got = plan(copied, target(['K'], ['K'], 'keepBoth'), custom(ownK), {});
+    expect(got.issues).toEqual([]);
+    expect(ownList(got.storedAfter)).toEqual([
+      ownK,
+      { ...(copied.value as t.ConfigRecord), name: 'K-copy' },
+    ]);
+  });
+
+  it('replaces a record entry whole: no stale leaf, the entry present', () => {
+    const server: t.TransferEntry = {
+      path: 'mcpServers',
+      key: 'BC',
+      value: { type: 'sse', url: 'https://new/' },
+      secrets: [],
+    };
+    const stored = { mcpServers: { BC: { type: 'sse', url: 'https://old/', title: 'Stale' } } };
+    const got = plan(server, target(['BC'], ['BC'], 'replace'), stored, {});
+    expect(got.issues).toEqual([]);
+    expect(got.storedAfter).toEqual({
+      mcpServers: { BC: { type: 'sse', url: 'https://new/' } },
+    });
   });
 });
