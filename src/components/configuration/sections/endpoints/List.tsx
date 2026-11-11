@@ -243,6 +243,7 @@ function EndpointListRow({
   onRevert,
   override,
   hide,
+  actions,
 }: t.EndpointListRowProps) {
   const localize = useLocalize();
   const rowRef = useRef<HTMLLIElement>(null);
@@ -287,6 +288,7 @@ function EndpointListRow({
       onClick: () => hide.onSelect(row),
     });
   }
+  menu.push(...(actions?.(row) ?? []));
   if (!disabled) {
     const deletable = isDeletable(row);
     menu.push({
@@ -366,6 +368,7 @@ export function EndpointList({
   onRevert,
   override,
   hide,
+  actions,
   onUndoRemoval,
   removalNotes,
   idPrefix,
@@ -403,6 +406,7 @@ export function EndpointList({
             onReveal={onReveal}
             override={override}
             hide={hide}
+            actions={actions}
             onDelete={onDelete}
             onRevert={onRevert}
           />

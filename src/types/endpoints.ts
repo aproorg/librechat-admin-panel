@@ -1,6 +1,7 @@
 import type { SettingDefinition } from 'librechat-data-provider';
 import type { ReactNode } from 'react';
 import type { ConfigRecord, ConfigValue, SchemaField } from './config';
+import type { KebabMenuItem } from './shared';
 
 /**
  * Where a custom endpoint comes from, seen from the edit target (WS10): in
@@ -307,6 +308,8 @@ export interface EndpointListProps {
   override?: { label: string; onSelect: (row: EndpointRow) => void };
   /** In a profile (`keyedTombstones`): hides an endpoint Base defines for the profile's members. */
   hide?: EndpointHideAction;
+  /** Extra menu items of a row, shown before Delete. */
+  actions?: (row: EndpointRow) => KebabMenuItem[];
   onUndoRemoval: (removal: EndpointRemoval) => void;
   /** What a removal leaves in the profiles that override the endpoint by name (`describeEntryOverrides`). */
   removalNotes?: (removal: EndpointRemoval) => readonly string[];
@@ -454,7 +457,15 @@ export interface EndpointServedBadgeProps {
 /** Props of one row of the endpoint list. */
 export interface EndpointListRowProps extends Pick<
   EndpointListProps,
-  'idPrefix' | 'disabled' | 'onOpen' | 'onReveal' | 'onDelete' | 'onRevert' | 'override' | 'hide'
+  | 'idPrefix'
+  | 'disabled'
+  | 'onOpen'
+  | 'onReveal'
+  | 'onDelete'
+  | 'onRevert'
+  | 'override'
+  | 'hide'
+  | 'actions'
 > {
   row: EndpointRow;
   isOpen: boolean;
