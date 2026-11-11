@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { useQueries, useQuery } from '@tanstack/react-query';
-import { Button, Checkbox, Dialog, PasswordField, RadioGroup } from '@clickhouse/click-ui';
+import { Button, Checkbox, Dialog, RadioGroup } from '@clickhouse/click-ui';
 import type * as t from '@/types';
 import { SKIP_REASON_KEYS } from '@/constants';
+import { PasswordInput } from '@/components/PasswordInput';
 import { availableScopesOptions, baseConfigOptions } from '@/server';
 import {
   useLocalize,
@@ -12,6 +13,8 @@ import {
   useEntryTransfer,
   importTargetLabel,
   scopeConfigOptions,
+  useConfigFeatures,
+  useConfigWriteRules,
 } from '@/hooks';
 import {
   cn,
@@ -78,6 +81,7 @@ function namesOf(
   entry: t.TransferEntry,
   base: t.BaseConfigData,
   scope: t.ResolvedConfigData | undefined,
+  merge: (base: t.ConfigRecord, scope: t.ResolvedConfigData) => t.ConfigRecord,
 ): t.TransferNames {
   if (!scope) {
     return {
@@ -85,26 +89,36 @@ function namesOf(
       shownKeys: namesAt(base.config, entry),
     };
   }
-  const shown = mergeScopeLayer(base.config, scope.overrides, scope.tombstones);
+  const shown = merge(base.config, scope);
   return { ownKeys: namesAt(scope.overrides, entry), shownKeys: namesAt(shown, entry) };
 }
 
-/** The names each ticked target holds and shows, by key; a target whose layers are still loading has none. */
+/** The names each ticked target holds and shows, by key; a target whose layers are loading or failed has none. */
 function useTargetNames(chosen: t.WriteTarget[], entry: t.TransferEntry) {
+  const rules = useConfigWriteRules();
+  const { keyedTombstones } = useConfigFeatures();
   const base = useQuery({ ...baseConfigOptions, enabled: chosen.length > 0 });
   const scoped = useQueries({
     queries: chosen.map((target) =>
       scopeConfigOptions(target.type === 'scope' ? target.scope : null),
     ),
   });
+  const merge = (lower: t.ConfigRecord, scope: t.ResolvedConfigData) =>
+    mergeScopeLayer(lower, scope.overrides, scope.tombstones, rules, keyedTombstones);
   const names = new Map<string, t.TransferNames>();
   chosen.forEach((target, i) => {
     if (!base.data) return;
     const scope = scoped[i]?.data;
     if (target.type === 'scope' && !scope) return;
-    names.set(keyOf(target), namesOf(entry, base.data, scope));
+    names.set(keyOf(target), namesOf(entry, base.data, scope, merge));
   });
-  return { names, loading: chosen.some((target) => !names.has(keyOf(target))) };
+  const failedQueries = [base, ...scoped].filter((query) => query.isError);
+  return {
+    names,
+    failed: chosen.length > 0 && failedQueries.length > 0,
+    loading: chosen.some((target) => !names.has(keyOf(target))),
+    retry: () => failedQueries.forEach((query) => void query.refetch()),
+  };
 }
 
 function describe(message: string, localize: t.LocalizeFn): string {
@@ -214,15 +228,31 @@ interface OptionsProps {
   choices: Readonly<Record<string, t.ClashChoice>>;
   secrets: Readonly<Record<string, string>>;
   loading: boolean;
+  failed: boolean;
+  onRetry: () => void;
   onChoose: (key: string, choice: t.ClashChoice) => void;
   onSecret: (path: string, value: string) => void;
 }
 
-function Options({ entry, clashing, choices, secrets, loading, onChoose, onSecret }: OptionsProps) {
+function Options(props: OptionsProps) {
+  const { entry, clashing, choices, secrets, loading, failed, onRetry, onChoose, onSecret } = props;
   const localize = useLocalize();
   return (
     <>
-      {loading && (
+      {failed && (
+        <div role="alert" className="flex items-center gap-3">
+          <span className="text-sm text-(--cui-color-text-danger)">
+            {localize('com_config_transfer_names_error')}
+          </span>
+          <Button
+            htmlType="button"
+            type="secondary"
+            label={localize('com_ui_retry')}
+            onClick={onRetry}
+          />
+        </div>
+      )}
+      {loading && !failed && (
         <p className="m-0 text-xs text-(--cui-color-text-muted)">
           {localize('com_config_transfer_names_loading')}
         </p>
@@ -252,7 +282,7 @@ function Options({ entry, clashing, choices, secrets, loading, onChoose, onSecre
         );
       })}
       {entry.secrets.map((path) => (
-        <PasswordField
+        <PasswordInput
           key={path}
           label={localize('com_config_transfer_secret', { path })}
           value={secrets[path] ?? ''}
@@ -344,7 +374,7 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
   const canWrite = hasConfigCapability(hasCapability, null, 'manage');
   const targets = transferTargets(canWrite ? scopes : EMPTY_SCOPES, source, canWrite);
   const { ticked, chosen, toggle } = useTicks(targets);
-  const { names, loading } = useTargetNames(chosen, entry);
+  const { names, loading, failed, retry } = useTargetNames(chosen, entry);
   const clashing = chosen.filter((target) => names.get(keyOf(target))?.ownKeys.has(entry.key));
   const choiceOf = (target: t.WriteTarget) => choices[keyOf(target)];
   const secretsTyped = entry.secrets.every((path) => (secrets[path] ?? '') !== '');
@@ -365,13 +395,11 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
     setError(undefined);
     try {
       const steps = chosen
-        .map((target) =>
-          planCopy(
-            entry,
-            { ...names.get(keyOf(target))!, target, clash: choiceOf(target) },
-            secrets,
-          ),
-        )
+        .flatMap((target) => {
+          const named = names.get(keyOf(target));
+          return named ? [{ ...named, target, clash: choiceOf(target) }] : [];
+        })
+        .map((wanted) => planCopy(entry, wanted, secrets))
         .filter((step): step is t.TransferStep => step !== null);
       if (steps.length === 0) return onClose();
       await transfer.run(mode, entry, steps);
@@ -424,6 +452,8 @@ function TransferBody({ mode, entry, source, onClose }: Omit<t.TransferDialogPro
                 choices={choices}
                 secrets={secrets}
                 loading={loading}
+                failed={failed}
+                onRetry={retry}
                 onChoose={(key, choice) => setChoices((prev) => ({ ...prev, [key]: choice }))}
                 onSecret={(path, value) => setSecrets((prev) => ({ ...prev, [path]: value }))}
               />

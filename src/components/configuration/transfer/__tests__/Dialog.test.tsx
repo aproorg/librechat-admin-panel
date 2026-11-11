@@ -15,16 +15,22 @@ const scopes = vi.hoisted(() => ({
   base: { config: {}, dbOverrides: {} } as { config: object; dbOverrides: object },
   docs: {} as Record<string, { overrides?: object; tombstones?: string[] }>,
   hold: null as Promise<void> | null,
+  failDocs: false,
+  failBase: false,
 }));
 
 vi.mock('@/server', () => ({
   applyConfigChangesFn: vi.fn(),
   baseConfigOptions: {
     queryKey: ['baseConfig'],
-    queryFn: () => Promise.resolve({ dbRevision: 'base-rev', ...scopes.base }),
+    queryFn: () =>
+      scopes.failBase
+        ? Promise.reject(new Error('base down'))
+        : Promise.resolve({ dbRevision: 'base-rev', ...scopes.base }),
   },
   getResolvedConfigFn: async ({ data }: { data: { principalId: string } }) => {
     await scopes.hold;
+    if (scopes.failDocs) throw new Error('profile down');
     return {
       revision: 'scope-rev',
       resolvedConfig: {},
@@ -101,6 +107,8 @@ beforeEach(() => {
   scopes.base = { config: {}, dbOverrides: {} };
   scopes.docs = {};
   scopes.hold = null;
+  scopes.failDocs = false;
+  scopes.failBase = false;
   scopes.list = [profile('a'), profile('b', false)];
   applyMock.mockResolvedValue(ok());
 });
@@ -427,6 +435,81 @@ describe('TransferDialog', () => {
       await clickConfirm();
       expect(await screen.findByRole('link', { name: /Team b/ })).toBeVisible();
       expect(sentOps()[0]).not.toEqual({ op: 'reset', path: 'mcpServers.Notes' });
+    });
+
+    it('shows an error and Retry, not "checking", when a ticked profile fails to load, and recovers', async () => {
+      scopes.failDocs = true;
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the names');
+      expect(screen.queryByText(/Checking the names/)).not.toBeInTheDocument();
+      expect(confirm()).toBeDisabled();
+      scopes.failDocs = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument();
+    });
+
+    it('shows an error and Retry when Base fails to load, and recovers', async () => {
+      scopes.failBase = true;
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      expect(await screen.findByRole('alert')).toHaveTextContent('Could not load the names');
+      expect(screen.queryByText(/Checking the names/)).not.toBeInTheDocument();
+      expect(confirm()).toBeDisabled();
+      scopes.failBase = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('frees a name the profile hides with a tombstone, so keep both takes it', async () => {
+      scopes.base = {
+        config: { mcpServers: { 'Notes-copy': { url: 'y' } } },
+        dbOverrides: {},
+      };
+      scopes.docs = {
+        a: { overrides: holdsNotes.overrides, tombstones: ['mcpServers.Notes-copy'] },
+      };
+      renderDialog();
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Team a/ }));
+      await choose('Team a', 'Keep both');
+      await clickConfirm();
+      await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+      expect(sentOps()).toContainEqual({
+        op: 'set',
+        path: 'mcpServers.Notes-copy.type',
+        value: 'sse',
+      });
+    });
+
+    it('keep both for Base avoids a name only librechat.yaml holds', async () => {
+      scopes.base = {
+        config: { mcpServers: { Notes: { url: 'x' }, 'Notes-copy': { url: 'y' } } },
+        dbOverrides: { mcpServers: { Notes: { url: 'x' } } },
+      };
+      renderDialog({ type: 'scope', scope: profile('a') });
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Base configuration/ }));
+      await choose('Base configuration', 'Keep both');
+      await clickConfirm();
+      await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+      expect(sentOps()).toContainEqual({
+        op: 'set',
+        path: 'mcpServers.Notes-copy-2.type',
+        value: 'sse',
+      });
+    });
+
+    it('does not ask about a name Base holds only through librechat.yaml, and writes once', async () => {
+      scopes.base = { config: { mcpServers: { Notes: { url: 'x' } } }, dbOverrides: {} };
+      renderDialog({ type: 'scope', scope: profile('a') });
+      fireEvent.click(await screen.findByRole('checkbox', { name: /Base configuration/ }));
+      await waitFor(() => expect(confirm()).toBeEnabled());
+      expect(screen.queryByRole('radiogroup')).not.toBeInTheDocument();
+      fireEvent.click(confirm());
+      await waitFor(() => expect(applyMock).toHaveBeenCalledTimes(1));
+      expect(sentOps()).toContainEqual({ op: 'set', path: 'mcpServers.Notes.type', value: 'sse' });
     });
 
     describe('typed secrets', () => {

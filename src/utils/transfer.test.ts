@@ -701,4 +701,18 @@ describe('planCopy ops through the real write planner', () => {
       mcpServers: { BC: { type: 'sse', url: 'https://new/' } },
     });
   });
+
+  it('writes over a name only the file layer holds when Base is the target: an override, no issue', () => {
+    const ops =
+      planCopy(copied, { target: base, ownKeys: new Set(), shownKeys: new Set(['K']) }, {})?.ops ??
+      [];
+    const got = planConfigChanges(ops, {
+      stored: {},
+      tombstones: [],
+      lower: custom(lowerK),
+      lowerKind: 'yaml',
+    });
+    expect(got.issues).toEqual([]);
+    expect(ownList(got.storedAfter)).toEqual([{ name: 'K', baseURL: 'https://new' }]);
+  });
 });

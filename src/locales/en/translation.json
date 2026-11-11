@@ -4060,6 +4060,7 @@
   "com_config_transfer_stale": "Not saved, changed by someone else",
   "com_config_transfer_skipped": "Skipped",
   "com_config_transfer_names_loading": "Checking the names in the places you ticked…",
+  "com_config_transfer_names_error": "Could not load the names in the places you ticked",
   "com_config_transfer_clash": "\"{{name}}\" already exists in {{place}}",
   "com_config_transfer_clash_replace": "Replace it",
   "com_config_transfer_clash_keep_both": "Keep both",
